@@ -138,6 +138,20 @@ export const OPTIONS: OptDef[] = [
     optArgCb: ou.nonEmptyCb,
   },
   {
+    longName: 'notification-listener',
+    environment: 'INTERCOM_HELPER_OPT_NOTIFICATION_LISTENER',
+    description:
+      'Listen on a local (Unix domain) socket and send every program that connects each notification as a line of JSON. The socket is /tmp/tr-ai-intercom-helper.<uid>/<port>.sock, with the port of --listen-port. tr-ai-intercom-notify is a ready-made client.',
+  },
+  {
+    longName: 'notification-listener-path',
+    environment: 'INTERCOM_HELPER_OPT_NOTIFICATION_LISTENER_PATH',
+    description:
+      'Listen on this socket path instead of the default one. Turns the listener on by itself.',
+    hasArg: true,
+    optArgCb: ou.nonEmptyCb,
+  },
+  {
     longName: 'log-level',
     environment: 'INTERCOM_HELPER_OPT_LOG_LEVEL',
     description: 'Log level: error, warn, info, debug or silent. The log goes to standard error.',
@@ -162,12 +176,16 @@ export interface Config {
   urlHeader: { name: string; value: string } | undefined;
   localSocket: string | undefined;
   command: string | undefined;
+  /** Serve notifications on a local socket of the helper's own. */
+  listener: boolean;
+  /** Its path, when not the default one. */
+  listenerPath: string | undefined;
 }
 
 export class ConfigError extends Error {}
 
 const HELP_TAIL =
-  'Each option is taken from the environment when it is not on the command line: --listen-port from INTERCOM_HELPER_OPT_LISTEN_PORT, --mcp-server-url from INTERCOM_HELPER_OPT_MCP_SERVER_URL, and so on. Several delivery methods (--notification-file, -dir, -url, -local-socket, -command) can be used together, one of each.';
+  'Each option is taken from the environment when it is not on the command line: --listen-port from INTERCOM_HELPER_OPT_LISTEN_PORT, --mcp-server-url from INTERCOM_HELPER_OPT_MCP_SERVER_URL, and so on. Several delivery methods (--notification-file, -dir, -url, -local-socket, -command, -listener) can be used together, one of each.';
 
 /**
  * The configuration, from the command line and the environment.
@@ -202,5 +220,9 @@ export function loadConfig(argv?: string[], opts: { exitOnError?: boolean } = {}
     urlHeader: header ? parseHeaderLine(header) : undefined,
     localSocket: value<string | undefined>('notification-local-socket'),
     command: value<string | undefined>('notification-command'),
+    listener:
+      value<boolean>('notification-listener') === true ||
+      value<string | undefined>('notification-listener-path') !== undefined,
+    listenerPath: value<string | undefined>('notification-listener-path'),
   };
 }

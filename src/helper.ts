@@ -31,7 +31,8 @@ export async function startHelper(opts: {
   const { config, logger } = opts;
   const sinks = opts.sinks ?? sinksFor(config, logger);
   const dispatcher = new Dispatcher(sinks, logger);
-  await dispatcher.start();
+  // Until the delivery methods are ready, requests are forwarded and nothing more.
+  let ready = false;
 
   const wakeup = new WakeupClient({
     deliver: (notification) => dispatcher.deliver(notification),
@@ -47,6 +48,7 @@ export async function startHelper(opts: {
     hooks: {
       activity: (started) => wakeup.activity(started),
       announced: ({ socket, requestUrl, authorization }) => {
+        if (!ready) return;
         const url = socketUrl(socket, requestUrl);
         if (url) {
           wakeup.announce(url, authorization);
@@ -68,8 +70,19 @@ export async function startHelper(opts: {
     });
   });
 
+  const port = (server.address() as AddressInfo).port;
+  try {
+    // Started after listening: a delivery method may need the port.
+    await dispatcher.start({ port });
+  } catch (err) {
+    dispatcher.stop();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    throw err;
+  }
+  ready = true;
+
   return {
-    port: (server.address() as AddressInfo).port,
+    port,
     wakeup,
     dispatcher,
     async stop() {

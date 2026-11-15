@@ -3,18 +3,25 @@ import { mkdir, open, readdir, rename, unlink, writeFile } from 'node:fs/promise
 import net from 'node:net';
 import path from 'node:path';
 
+import { listenerSink } from './listener.js';
 import type { Logger } from './logger.js';
 import type { Config } from './options.js';
 import type { Notification } from './wakeup.js';
 
+/** What a delivery method is told when it starts. */
+export interface StartInfo {
+  /** The local port the helper listens on. */
+  port: number;
+}
+
 /** One way of handing a notification to something local. */
 export interface Sink {
-  /** Short name for the log: file, dir, url, local-socket, command. */
+  /** Short name for the log: file, dir, url, local-socket, command, listener. */
   readonly name: string;
   /** The method queues by itself; the dispatcher then hands over at once. */
   readonly queuesItself?: boolean;
-  /** Prepare, once, before the first notification. */
-  start?(): Promise<void>;
+  /** Prepare, once, before the first notification. The helper listens by then. */
+  start?(info: StartInfo): Promise<void>;
   deliver(notification: Notification, json: string): Promise<void>;
   stop?(): void;
 }
@@ -212,6 +219,7 @@ export function sinksFor(config: Config, logger: Logger): Sink[] {
   if (config.url) sinks.push(urlSink(config.url, config.urlHeader));
   if (config.localSocket) sinks.push(localSocketSink(config.localSocket));
   if (config.command) sinks.push(commandSink(config.command, logger));
+  if (config.listener) sinks.push(listenerSink(logger, config.listenerPath));
   return sinks;
 }
 
@@ -229,8 +237,8 @@ export class Dispatcher {
     private readonly logger: Logger,
   ) {}
 
-  async start(): Promise<void> {
-    for (const sink of this.sinks) await sink.start?.();
+  async start(info: StartInfo): Promise<void> {
+    for (const sink of this.sinks) await sink.start?.(info);
   }
 
   deliver(notification: Notification): void {

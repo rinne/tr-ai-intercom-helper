@@ -78,7 +78,7 @@ describe('directory', () => {
   it('writes one complete file per notification', async () => {
     const spool = path.join(dir, 'spool');
     const sink = dirSink(spool);
-    await sink.start!();
+    await sink.start!({ port: 0 });
     await sink.deliver(note(4775), json(note(4775)));
     await sink.deliver(note(4776), json(note(4776)));
     expect((await readdir(spool)).sort()).toEqual(['.tmp', '000012a7.json', '000012a8.json']);
@@ -95,7 +95,7 @@ describe('directory', () => {
     await chmod(parent, 0o555);
     cleanup.push(() => chmod(parent, 0o755));
     const sink = dirSink(spool);
-    await sink.start!();
+    await sink.start!({ port: 0 });
     await sink.deliver(note(1), json(note(1)));
     expect((await readdir(spool)).sort()).toEqual(['.tmp', '00000001.json']);
     expect(await readdir(parent)).toEqual(['spool']);
@@ -104,7 +104,7 @@ describe('directory', () => {
   it('shows a watcher of the directory one event per notification, for a finished file', async () => {
     const spool = path.join(dir, 'spool');
     const sink = dirSink(spool);
-    await sink.start!();
+    await sink.start!({ port: 0 });
     await sleep(100);
     const seen: { name: string; complete: boolean }[] = [];
     const reads: Promise<void>[] = [];
@@ -138,7 +138,7 @@ describe('directory', () => {
   it('does not change the directory while the file is being prepared', async () => {
     const spool = path.join(dir, 'spool');
     const sink = dirSink(spool);
-    await sink.start!();
+    await sink.start!({ port: 0 });
     const before = (await stat(spool)).mtimeMs;
     await sleep(30);
     await writeFile(path.join(spool, '.tmp', 'being-written'), 'x');
@@ -152,7 +152,7 @@ describe('directory', () => {
     await writeFile(path.join(spool, '.tmp', '0000000a.json.4242.tmp'), 'half');
     await writeFile(path.join(spool, '.tmp', 'somebody-elses-file'), 'keep');
     await writeFile(path.join(spool, '00000009.json'), 'unread');
-    await dirSink(spool).start!();
+    await dirSink(spool).start!({ port: 0 });
     expect(await readdir(path.join(spool, '.tmp'))).toEqual(['somebody-elses-file']);
     expect((await readdir(spool)).sort()).toEqual(['.tmp', '00000009.json']);
   });
@@ -161,7 +161,7 @@ describe('directory', () => {
     const spool = path.join(dir, 'spool');
     const tmp = path.join(dir, 'elsewhere');
     const sink = dirSink(spool, tmp);
-    await sink.start!();
+    await sink.start!({ port: 0 });
     await sink.deliver(note(1), json(note(1)));
     expect(await readdir(spool)).toEqual(['00000001.json']);
     expect(await readdir(tmp)).toEqual([]);
@@ -170,7 +170,7 @@ describe('directory', () => {
   it('replaces a file of the same number', async () => {
     const spool = path.join(dir, 'spool');
     const sink = dirSink(spool);
-    await sink.start!();
+    await sink.start!({ port: 0 });
     await sink.deliver(note(1), json(note(1)));
     await sink.deliver(note(1, 'missed'), json(note(1, 'missed')));
     expect(JSON.parse(await readFile(path.join(spool, '00000001.json'), 'utf8')).message).toBe(
@@ -321,7 +321,7 @@ describe('the dispatcher', () => {
     const file = path.join(dir, 'notifications');
     const spool = path.join(dir, 'spool');
     const dispatcher = new Dispatcher([fileSink(file), dirSink(spool)], silentLogger);
-    await dispatcher.start();
+    await dispatcher.start({ port: 0 });
     dispatcher.deliver(note(1));
     dispatcher.deliver(note(2));
     await dispatcher.idle();

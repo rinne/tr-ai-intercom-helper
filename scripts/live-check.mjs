@@ -74,6 +74,7 @@ const INTERCOM = String(opt.value('intercom-url')).replace(/\/+$/, '');
 const ADMIN = String(opt.value('admin-url')).replace(/\/+$/, '');
 const WAIT_MS = opt.value('wait') * 1000;
 const CLI = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
+const NOTIFY = fileURLToPath(new URL('../dist/notify-cli.js', import.meta.url));
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const results = [];
@@ -176,6 +177,7 @@ const FILE = path.join(dir, 'notifications');
 const SPOOL = path.join(dir, 'spool');
 const SOCKET = path.join(dir, 'sock');
 const COMMAND_OUT = path.join(dir, 'command-out');
+const LISTENER = path.join(dir, 'listen.sock');
 
 const posted = [];
 const hook = http.createServer((req, res) => {
@@ -199,6 +201,20 @@ const local = net.createServer((conn) => {
 });
 await new Promise((resolve) => local.listen(SOCKET, resolve));
 
+// The notify command, connected to the helper's listener for the whole run.
+let notified = '';
+let notifier;
+function startNotifier() {
+  notifier = spawn(
+    process.execPath,
+    [NOTIFY, '--monitor', '--reconnect', '--socket-path', LISTENER],
+    {
+      stdio: ['ignore', 'pipe', 'ignore'],
+    },
+  );
+  notifier.stdout.on('data', (c) => (notified += c));
+}
+
 let helper;
 async function startHelper() {
   const child = spawn(
@@ -213,6 +229,7 @@ async function startHelper() {
       '--notification-url-header=X-Check: yes',
       `--notification-local-socket=${SOCKET}`,
       `--notification-command=cat >> '${COMMAND_OUT}'`,
+      `--notification-listener-path=${LISTENER}`,
     ],
     { stdio: ['ignore', 'ignore', 'pipe'] },
   );
@@ -257,6 +274,7 @@ async function received() {
     url: posted.map((p) => JSON.parse(p.text)),
     'local-socket': socketed.flatMap(parse),
     command: parse(await readFile(COMMAND_OUT, 'utf8').catch(() => '')),
+    listener: parse(notified),
   };
 }
 /** The sequence numbers a list of notifications covers, bursts unpacked. */
@@ -289,6 +307,13 @@ try {
 
   console.log(`Intercom ${INTERCOM}, console ${ADMIN}, working in ${dir}\n`);
   await startHelper();
+  startNotifier();
+  await until(
+    'the notify command to connect',
+    () => helper.lines().some((l) => l.msg === 'notification listener ready'),
+    10_000,
+  );
+  await sleep(500);
 
   // The receiver talks through the helper, the sender straight to the intercom.
   const viaHelper = agentAt(helper.base, receiver.token);
@@ -429,6 +454,19 @@ try {
     last.message === 'missed' && last.seq === seq + 3,
     `${last.message} seq ${last.seq}`,
   );
+  const viaNotify = await until(
+    'the notify command to print it too',
+    async () => {
+      const list = (await received()).listener;
+      return list.at(-1)?.message === 'missed' ? list : undefined;
+    },
+    15_000,
+  );
+  check(
+    'the notify command reconnected to the restarted helper',
+    viaNotify.at(-1).seq === seq + 3,
+    `missed seq ${viaNotify.at(-1).seq}`,
+  );
   check('the helper never logs a token', !helper.log().includes('tai_'));
 
   const again = agentAt(helper.base, receiver.token);
@@ -443,6 +481,7 @@ try {
   failed = err;
 } finally {
   helper?.child.kill('SIGTERM');
+  notifier?.kill('SIGTERM');
   hook.close();
   local.close();
   try {

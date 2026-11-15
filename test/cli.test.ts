@@ -9,6 +9,7 @@ import { AUTH, startStub, until, type Stub } from './stub.js';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const cli = path.join(root, 'dist', 'cli.js');
+const notify = path.join(root, 'dist', 'notify-cli.js');
 
 let stub: Stub;
 let dir: string;
@@ -36,9 +37,9 @@ interface Run {
   stderr: string;
 }
 
-function run(args: string[], env: Record<string, string> = {}): Promise<Run> {
+function run(args: string[], env: Record<string, string> = {}, program = cli): Promise<Run> {
   return new Promise((resolve) => {
-    const p = spawn(process.execPath, [cli, ...args], { env: { ...process.env, ...env } });
+    const p = spawn(process.execPath, [program, ...args], { env: { ...process.env, ...env } });
     let stdout = '';
     let stderr = '';
     p.stdout.on('data', (c) => (stdout += String(c)));
@@ -158,5 +159,143 @@ describe('the command', () => {
     expect(res.status).toBe(200);
     await res.text();
     expect(helper.log().some((l) => String(l.msg).startsWith('no delivery method'))).toBe(true);
+  });
+});
+
+describe('the notify command', () => {
+  const usage = (args: string[]): Promise<Run> => run(args, {}, notify);
+
+  it('prints its usage with --help', async () => {
+    const out = await usage(['--help']);
+    const text = out.stdout + out.stderr;
+    for (const option of [
+      '--monitor',
+      '--oneshot',
+      '--reconnect',
+      '--helper-port',
+      '--socket-path',
+    ]) {
+      expect(text).toContain(option);
+    }
+  });
+
+  it('needs exactly one mode and exactly one way to find the socket', async () => {
+    const bad = [
+      ['--helper-port', '32323'],
+      ['--monitor'],
+      ['--monitor', '--oneshot', '--helper-port', '32323'],
+      ['--oneshot', '--reconnect', '--helper-port', '32323'],
+      ['--reconnect', '--helper-port', '32323'],
+      ['--monitor', '--helper-port', '32323', '--socket-path', '/tmp/x.sock'],
+      ['--monitor', '--helper-port', 'many'],
+      ['--monitor', '--helper-port', '32323', '--idle-notification-interval', 'soon'],
+      ['--monitor', '--helper-port', '32323', '--idle-notification-interval', '0'],
+    ];
+    for (const args of bad) {
+      const out = await usage(args);
+      expect(out.code, args.join(' ')).not.toBe(0);
+      expect(out.stdout, args.join(' ')).not.toContain('{');
+    }
+  });
+
+  it('ends with an error when no helper listens there', async () => {
+    const out = await usage(['--oneshot', '--socket-path', path.join(dir, 'nothing.sock')]);
+    expect(out.code).toBe(1);
+    expect(out.stderr).toContain('tr-ai-intercom-notify: Could not connect');
+    expect(out.stdout).toBe('');
+  });
+
+  it('prints the notifications of a running helper', async () => {
+    const socketPath = path.join(dir, 's.sock');
+    const helper = await start([
+      `--mcp-server-url=${stub.url}`,
+      '--listen-port=0',
+      `--notification-listener-path=${socketPath}`,
+    ]);
+    await until(() => helper.log().some((l) => l.msg === 'notification listener ready'), 5000);
+    const ready = helper.log().find((l) => l.msg === 'notification listener ready')!;
+    expect(ready.path).toBe(socketPath);
+    expect(ready.command).toBe(
+      `npx -y -p tr-ai-intercom-helper tr-ai-intercom-notify --monitor --socket-path '${socketPath}'`,
+    );
+
+    const next = stub.nextSocket();
+    const res = await fetch(`http://127.0.0.1:${helper.port}/mcp`, {
+      headers: { Authorization: AUTH },
+    });
+    await res.text();
+    const socket = await next;
+    await socket.hello();
+    socket.send({
+      message: 'hello',
+      seq: 0,
+      time: '2026-11-15T12:00:00.000Z',
+      data: { pending: false },
+    });
+    const frame = (seq: number): Record<string, unknown> => ({
+      message: 'inbox-activity',
+      seq,
+      time: '2026-11-15T12:00:01.000Z',
+      data: {},
+    });
+
+    // One notification arrives before anybody listens: it is kept for the first client.
+    socket.send(frame(1));
+    await new Promise((r) => setTimeout(r, 200));
+    const once = await usage(['--oneshot', '--socket-path', socketPath]);
+    expect(once.code).toBe(0);
+    expect(once.stdout).toBe(`${JSON.stringify(frame(1))}\n`);
+
+    const monitor = spawn(process.execPath, [notify, '--monitor', '--socket-path', socketPath]);
+    let printed = '';
+    monitor.stdout.on('data', (c) => (printed += String(c)));
+    const ended = new Promise<number | null>((resolve) => monitor.on('exit', resolve));
+    await new Promise((r) => setTimeout(r, 400));
+    socket.send(frame(2));
+    socket.send(frame(3));
+    await until(() => printed.split('\n').length === 3, 5000);
+    expect(printed).toBe(`${JSON.stringify(frame(2))}\n${JSON.stringify(frame(3))}\n`);
+    monitor.kill('SIGTERM');
+    expect(await ended).toBe(0);
+  });
+
+  it('prints an idle notification when asked to and nothing happens', async () => {
+    const socketPath = path.join(dir, 's.sock');
+    await start([
+      `--mcp-server-url=${stub.url}`,
+      '--listen-port=0',
+      `--notification-listener-path=${socketPath}`,
+    ]);
+    const out = await usage([
+      '--oneshot',
+      '--socket-path',
+      socketPath,
+      '--idle-notification-interval',
+      '0.3',
+    ]);
+    expect(out.code).toBe(0);
+    expect(JSON.parse(out.stdout)).toEqual({
+      message: 'local-idle-notification',
+      seq: 0,
+      time: expect.any(String),
+      data: { idle: 0 },
+    });
+  });
+
+  it('ends with an error when the helper stops', async () => {
+    const socketPath = path.join(dir, 's.sock');
+    const helper = await start([
+      `--mcp-server-url=${stub.url}`,
+      '--listen-port=0',
+      `--notification-listener-path=${socketPath}`,
+    ]);
+    const monitor = usage(['--monitor', '--socket-path', socketPath]);
+    await new Promise((r) => setTimeout(r, 400));
+    child!.kill('SIGTERM');
+    await helper.exited;
+    child = undefined;
+    const out = await monitor;
+    expect(out.code).toBe(1);
+    expect(out.stderr).toContain('the helper stopped');
   });
 });

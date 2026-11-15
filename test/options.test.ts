@@ -47,6 +47,8 @@ describe('options', () => {
       urlHeader: undefined,
       localSocket: undefined,
       command: undefined,
+      listener: false,
+      listenerPath: undefined,
     });
   });
 

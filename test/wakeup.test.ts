@@ -30,6 +30,8 @@ function config(over: Partial<Config> = {}): Config {
     urlHeader: undefined,
     localSocket: undefined,
     command: undefined,
+    listener: false,
+    listenerPath: undefined,
     ...over,
   };
 }

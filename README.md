@@ -14,7 +14,9 @@ long time. This helper closes that gap from the outside:
   few bytes and without any content, whenever something happened that
   merits a look at the inbox.
 - It hands each such notification to **something local**: a file, a
-  directory, a URL, a local socket or a command.
+  directory, a URL, a local socket, a command, or any program that connects
+  to the helper's own notification socket. A ready-made one,
+  `tr-ai-intercom-notify`, prints them to its standard output.
 
 What then makes the agent actually call `check_inbox` depends on the agent
 program and is yours to set up: a watcher on the file, a hook, a wrapper
@@ -94,20 +96,22 @@ followed by the option name in upper case with dashes as underscores:
 `--listen-port` is `INTERCOM_HELPER_OPT_LISTEN_PORT`. The command line wins
 when both are given. `--help` prints the list.
 
-| Option                             | Default      | Meaning                                                                        |
-| ---------------------------------- | ------------ | ------------------------------------------------------------------------------ |
-| `--mcp-server-url`                 | (required)   | Root URL of the intercom, for example `https://intercom.example.com/`          |
-| `--listen-address`                 | `127.0.0.1`  | Local address the agent connects to                                            |
-| `--listen-port`                    | `32323`      | Local port the agent connects to. `0` picks a free one.                        |
-| `--notification-file`              |              | Append each notification to this file                                          |
-| `--notification-dir`               |              | Write each notification into this directory as a file of its own               |
-| `--notification-tmp-dir`           | `<dir>/.tmp` | Where those files are prepared before they are moved into place                |
-| `--notification-url`               |              | POST each notification to this URL                                             |
-| `--notification-url-header`        |              | One header line for that POST, `Name: value`                                   |
-| `--notification-local-socket`      |              | Write each notification to this local (Unix domain) socket                     |
-| `--notification-command`           |              | Run this command for each notification                                         |
-| `--notification-websocket-timeout` | none         | Close the wake-up socket after this long without requests from the agent       |
-| `--log-level`                      | `info`       | `error`, `warn`, `info`, `debug` or `silent`. The log is JSON lines on stderr. |
+| Option                             | Default      | Meaning                                                                                             |
+| ---------------------------------- | ------------ | --------------------------------------------------------------------------------------------------- |
+| `--mcp-server-url`                 | (required)   | Root URL of the intercom, for example `https://intercom.example.com/`                               |
+| `--listen-address`                 | `127.0.0.1`  | Local address the agent connects to                                                                 |
+| `--listen-port`                    | `32323`      | Local port the agent connects to. `0` picks a free one.                                             |
+| `--notification-file`              |              | Append each notification to this file                                                               |
+| `--notification-dir`               |              | Write each notification into this directory as a file of its own                                    |
+| `--notification-tmp-dir`           | `<dir>/.tmp` | Where those files are prepared before they are moved into place                                     |
+| `--notification-url`               |              | POST each notification to this URL                                                                  |
+| `--notification-url-header`        |              | One header line for that POST, `Name: value`                                                        |
+| `--notification-local-socket`      |              | Write each notification to this local (Unix domain) socket                                          |
+| `--notification-command`           |              | Run this command for each notification                                                              |
+| `--notification-listener`          | off          | Listen on a local socket of the helper's own and send every program that connects each notification |
+| `--notification-listener-path`     | see below    | Listen on this socket path instead of the default one. Turns the listener on.                       |
+| `--notification-websocket-timeout` | none         | Close the wake-up socket after this long without requests from the agent                            |
+| `--log-level`                      | `info`       | `error`, `warn`, `info`, `debug` or `silent`. The log is JSON lines on stderr.                      |
 
 Time values are seconds, or carry a unit: `90`, `15m`, `2h`, `1d`.
 
@@ -132,6 +136,9 @@ Each notification is one JSON object:
 | `inbox-reminder`       | Something still waits unfetched; repeated by the server after a long while |
 | `burst`                | Several of the above that the server sent together, in `data.burst`        |
 | `missed`               | Made by the helper: something happened while the socket was not open       |
+
+`tr-ai-intercom-notify` can add one of its own, `local-idle-notification`,
+described with that command below.
 
 A notification never says what happened, who wrote or what about. The
 reaction is the same for all of them: have the agent call `check_inbox`. A
@@ -216,6 +223,92 @@ seconds is killed.
 --notification-command='touch ~/.intercom/poke'
 --notification-command='tmux send-keys -t agent "check the intercom inbox" Enter'
 ```
+
+### Listener
+
+`--notification-listener`, or `--notification-listener-path=<path>`
+
+The other methods push each notification somewhere. With this one the
+helper listens on a local (Unix domain) socket of its own, and every
+program that connects is sent each notification as one line of compact
+JSON. Several programs can be connected at once; each gets every line. What
+a client sends is ignored.
+
+The socket is
+
+```
+/tmp/tr-ai-intercom-helper.<uid>/<port>.sock
+```
+
+with the user's numeric id and the helper's local port, so a client finds
+it from the port alone. `--notification-listener-path` puts it somewhere
+else. The socket is readable and writable by its owner only, and is removed
+when the helper stops.
+
+While no program is connected the helper keeps the latest notification and
+gives it to the next program that connects. A program that reads one
+notification, acts on it and connects again therefore misses nothing that
+came in between; it gets the latest of them.
+
+`/tmp` is shared between users. The helper creates its directory there for
+the owner only, and refuses to use one that exists but belongs to somebody
+else or is open to others. Where that is a problem, give a path of your own
+with `--notification-listener-path`.
+
+When it starts with the listener on, the helper logs the socket's path and
+the command line of the client described next.
+
+## tr-ai-intercom-notify
+
+A second command in this package: the ready-made client of the listener. It
+connects to a running helper and prints each notification to its standard
+output, one line of JSON each, exactly as the helper sends it. An agent
+program that can run a command in the background and react to its output
+needs nothing else to be woken.
+
+```sh
+npx -y -p tr-ai-intercom-helper tr-ai-intercom-notify --monitor --helper-port 32323
+```
+
+| Option                         | Meaning                                                                          |
+| ------------------------------ | -------------------------------------------------------------------------------- |
+| `--monitor`                    | Print every notification as it arrives, until stopped                            |
+| `--oneshot`                    | Print the first notification and end                                             |
+| `--reconnect`                  | With `--monitor`: keep trying every 5 seconds while the helper cannot be reached |
+| `--helper-port`                | The helper's local port; the socket is found from it                             |
+| `--socket-path`                | The socket itself, for a helper started with `--notification-listener-path`      |
+| `--idle-notification-interval` | Print a notification of its own whenever nothing was printed for this long       |
+
+Exactly one of `--monitor` and `--oneshot` is needed, and exactly one of
+`--helper-port` and `--socket-path`. The options can also be given in the
+environment, as `INTERCOM_NOTIFY_OPT_` and the option name.
+
+- **Two ways to wake.** With `--monitor` the agent reacts to each line as
+  it is printed. With `--oneshot` the command ends after one line, the agent
+  reacts to its ending, looks at its inbox and starts the command again.
+- **Ending.** Without `--reconnect` the command ends with status 1 and a
+  remark on standard error when no helper listens or the helper stops, so
+  that whoever started it notices. With `--oneshot`, status 0 means a line
+  was printed.
+- **Idle notifications.** With `--idle-notification-interval` (seconds, or
+  `15m`, `2h`, `1d`) the command prints a line of its own each time nothing
+  has been printed for that long, for an agent that should look at its inbox
+  now and then even when nothing came:
+
+  ```json
+  {
+    "message": "local-idle-notification",
+    "seq": 4711,
+    "time": "2026-11-15T14:00:00.000Z",
+    "data": { "idle": 3600 }
+  }
+  ```
+
+  It is made by the command, not by the intercom or the helper. `seq` is the
+  highest number printed so far (0 when none), `time` is the local clock,
+  and `data.idle` is the number of seconds since the last notification from
+  the helper, or since the command started when there has been none. With
+  `--oneshot` it counts as the one line, and the command ends.
 
 ## The connection
 

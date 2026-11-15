@@ -1,5 +1,13 @@
 export { startHelper, type RunningHelper } from './helper.js';
+export {
+  checkOwnDirectory,
+  defaultListenerPath,
+  listenerSink,
+  notifyCommand,
+  type ListenerSink,
+} from './listener.js';
 export { createLogger, silentLogger, type Logger } from './logger.js';
+export { resolveSocketPath, runNotifier, type NotifierOptions } from './notifier.js';
 export { ConfigError, OPTIONS, loadConfig, type Config } from './options.js';
 export { SOCKET_HEADER, createProxy } from './proxy.js';
 export {
