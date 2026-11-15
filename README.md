@@ -262,7 +262,7 @@ the command line of the client described next.
 
 A second command in this package: the ready-made client of the listener. It
 connects to a running helper and prints each notification to its standard
-output, one line of JSON each, exactly as the helper sends it. An agent
+output, one line of compact JSON each. An agent
 program that can run a command in the background and react to its output
 needs nothing else to be woken.
 
@@ -283,6 +283,22 @@ Exactly one of `--monitor` and `--oneshot` is needed, and exactly one of
 `--helper-port` and `--socket-path`. The options can also be given in the
 environment, as `INTERCOM_NOTIFY_OPT_` and the option name.
 
+- **Only notifications are printed.** Every line from the socket must be a
+  JSON object with at least a `message` and a numeric `seq`. Anything else
+  makes the command close the connection, say so on standard error, and end
+  with status 1 (or, with `--reconnect`, try again). What is printed is
+  therefore always one JSON object per line.
+- **Bursts are unrolled.** A `burst` is never printed. Its members are
+  printed as lines of their own, in order, each checked like any other
+  notification. With `--oneshot` the latest member is the one line.
+- **Only the user's own socket.** The command connects to a socket only if
+  nobody else could have put it there or could lead its path elsewhere: the
+  socket must belong to the user who runs the command, its directory must
+  belong to that user or to root and not be writable by anybody else, and
+  the directories above must belong to that user or to root and be writable
+  by others only if they are sticky, as `/tmp` is. The default place meets
+  this. A socket placed directly in `/tmp` does not; put it in a directory
+  of your own.
 - **Two ways to wake.** With `--monitor` the agent reacts to each line as
   it is printed. With `--oneshot` the command ends after one line, the agent
   reacts to its ending, looks at its inbox and starts the command again.

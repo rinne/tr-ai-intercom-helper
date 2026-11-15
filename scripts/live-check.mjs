@@ -411,11 +411,18 @@ try {
       `${list.map((n) => n.message).join(', ')}: ${got.join(' ')}`,
     );
   }
+  // The notify command unrolls bursts, so it is compared by what it covers.
+  const { listener: viaListener, ...pushed } = later;
   check(
     'every method received the same',
     new Set(
-      Object.values(later).map((list) => JSON.stringify(list.map(({ name: _name, ...n }) => n))),
+      Object.values(pushed).map((list) => JSON.stringify(list.map(({ name: _name, ...n }) => n))),
     ).size === 1,
+  );
+  check(
+    'the notify command printed each notification on a line of its own',
+    viaListener.length === 3 && viaListener.every((n) => n.message !== 'burst'),
+    viaListener.map((n) => n.message).join(', '),
   );
 
   // Stop the helper, let something happen, start it again.

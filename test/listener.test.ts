@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { chmod, lstat, mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, mkdtemp, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -14,7 +14,7 @@ import {
   type ListenerSink,
 } from '../src/listener.js';
 import { silentLogger } from '../src/logger.js';
-import { resolveSocketPath, runNotifier } from '../src/notifier.js';
+import { resolveSocketPath, runNotifier, socketProblem } from '../src/notifier.js';
 import { NOTIFY_OPTIONS } from '../src/notify-options.js';
 import { loadConfig } from '../src/options.js';
 import { sinksFor } from '../src/sinks.js';
@@ -347,6 +347,210 @@ describe('the notifier', () => {
     expect(r.lines).toEqual([line(1), line(2)]);
     for (const conn of conns) conn.destroy();
     await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  /** A server that sends the given text to whoever connects. */
+  async function rogue(text: string): Promise<{ closed: () => boolean }> {
+    let closed = false;
+    const conns: net.Socket[] = [];
+    const server = net.createServer((conn) => {
+      conns.push(conn);
+      conn.on('error', () => undefined);
+      conn.on('close', () => (closed = true));
+      conn.write(text);
+    });
+    await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+    cleanup.push(async () => {
+      for (const conn of conns) conn.destroy();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    });
+    return { closed: () => closed };
+  }
+
+  it('unrolls a burst into its notifications, in order', async () => {
+    await listen();
+    const r = run('monitor');
+    await until(() => sink!.clientCount() === 1);
+    const burst: Notification = {
+      message: 'burst',
+      seq: 3,
+      time: '2026-11-15T12:00:03.000Z',
+      data: { burst: [note(2), note(3, 'shared-memory-update')] },
+    };
+    await push(1);
+    await sink!.deliver(burst, JSON.stringify(burst));
+    await push(4);
+    await until(() => r.lines.length === 4);
+    expect(r.lines).toEqual([line(1), line(2), line(3, 'shared-memory-update'), line(4)]);
+  });
+
+  it('prints the latest notification of a burst in oneshot mode', async () => {
+    await listen();
+    const r = run('oneshot');
+    await until(() => sink!.clientCount() === 1);
+    const burst: Notification = {
+      message: 'burst',
+      seq: 3,
+      time: '2026-11-15T12:00:03.000Z',
+      data: { burst: [note(2), note(3)] },
+    };
+    await sink!.deliver(burst, JSON.stringify(burst));
+    expect(await r.status).toBe(0);
+    expect(r.lines).toEqual([line(3)]);
+  });
+
+  it('prints compact JSON whatever the spacing was, and keeps members it does not know', async () => {
+    await rogue('{ "message": "inbox-activity",  "seq": 5, "extra": [1, 2] }\n');
+    const r = run('monitor');
+    await until(() => r.lines.length === 1);
+    expect(r.lines[0]).toBe('{"message":"inbox-activity","seq":5,"extra":[1,2]}\n');
+  });
+
+  it('closes the connection and ends when something else than notifications arrives', async () => {
+    const bad = [
+      'hello there\n',
+      '"just a string"\n',
+      '[1,2]\n',
+      '{"message":"inbox-activity"}\n',
+      '{"seq":1}\n',
+      '{"message":"","seq":1}\n',
+      '{"message":"inbox-activity","seq":"1"}\n',
+      '{"message":"burst","seq":2,"data":{}}\n',
+      '{"message":"burst","seq":2,"data":{"burst":[]}}\n',
+      '{"message":"burst","seq":2,"data":{"burst":[{"message":"inbox-activity","seq":1},{"seq":2}]}}\n',
+      '{"message":"burst","seq":2,"data":{"burst":[{"message":"burst","seq":2,"data":{"burst":[]}}]}}\n',
+    ];
+    for (const text of bad) {
+      await rm(socketPath, { force: true });
+      const server = await rogue(text);
+      const r = run('monitor');
+      expect(await r.status, text).toBe(1);
+      expect(r.lines, text).toEqual([]);
+      expect(r.errors[0], text).toMatch(/not a notification, so the connection was closed/);
+      await until(() => server.closed());
+      for (const c of cleanup.splice(0)) await c();
+    }
+  });
+
+  it('prints what was valid before the first line that is not', async () => {
+    await rogue(`${line(1)}garbage\n${line(2)}`);
+    const r = run('monitor');
+    expect(await r.status).toBe(1);
+    expect(r.lines).toEqual([line(1)]);
+  });
+
+  it('prints nothing of a burst with a bad member', async () => {
+    await rogue(
+      '{"message":"burst","seq":2,"data":{"burst":[{"message":"inbox-activity","seq":1},"x"]}}\n',
+    );
+    const r = run('monitor');
+    expect(await r.status).toBe(1);
+    expect(r.lines).toEqual([]);
+  });
+
+  it('closes the connection on a line that never ends', async () => {
+    await rogue('x'.repeat(1024 * 1024 + 10));
+    const r = run('monitor');
+    expect(await r.status).toBe(1);
+    expect(r.errors[0]).toMatch(/longer than a notification can be/);
+  });
+
+  it('tries again after bad input when told to reconnect', async () => {
+    await rogue('garbage\n');
+    const r = run('monitor', { reconnect: true, cooloffMs: 60 });
+    await until(() => r.errors.length === 1);
+    expect(r.errors[0]).toMatch(/not a notification.*Trying again/);
+    for (const c of cleanup.splice(0, 1)) await c();
+    await rm(socketPath, { force: true });
+    await listen();
+    await until(() => sink!.clientCount() === 1);
+    await push(1);
+    await until(() => r.lines.length === 1);
+    expect(r.lines).toEqual([line(1)]);
+  });
+
+  it('connects only to a socket of the user who runs it', async () => {
+    await listen();
+    expect(await socketProblem(socketPath)).toBeUndefined();
+    expect(await socketProblem(path.join(dir, 'nothing'))).toBeUndefined();
+    expect(await socketProblem(path.join(dir, 'no-such-dir', 's.sock'))).toBeUndefined();
+
+    const file = path.join(dir, 'file');
+    await writeFile(file, '');
+    expect(await socketProblem(file)).toMatch(/is not a socket/);
+    const link = path.join(dir, 'link.sock');
+    await symlink(socketPath, link);
+    expect(await socketProblem(link)).toMatch(/is not a socket/);
+
+    // A socket of another user: the same check, with our own id changed.
+    // Root's directories stay trusted, ours then look like a stranger's.
+    const getuid = process.getuid!;
+    process.getuid = () => getuid() + 1;
+    try {
+      expect(await socketProblem(socketPath)).toMatch(/belongs to another user/);
+      const r = run('monitor');
+      expect(await r.status).toBe(1);
+      expect(r.errors[0]).toMatch(/belongs to another user/);
+      expect(sink!.clientCount()).toBe(0);
+    } finally {
+      process.getuid = getuid;
+    }
+  });
+
+  it('trusts a socket only where nobody else can change what its path leads to', async () => {
+    // Its own directory, open to others: the path could be swapped.
+    await listen();
+    await chmod(dir, 0o777);
+    expect(await socketProblem(socketPath)).toMatch(/can be written by other users/);
+    await chmod(dir, 0o770);
+    expect(await socketProblem(socketPath)).toMatch(/can be written by other users/);
+    // Sticky is not enough for the directory the socket is in: others cannot
+    // remove ours there, but can put theirs in its place once ours is gone.
+    await chmod(dir, 0o1777);
+    expect(await socketProblem(socketPath)).toMatch(/can be written by other users/);
+    const r = run('oneshot');
+    expect(await r.status).toBe(1);
+    expect(r.errors[0]).toMatch(/Use a socket in a directory of your own/);
+    await chmod(dir, 0o700);
+    expect(await socketProblem(socketPath)).toBeUndefined();
+  });
+
+  it('checks the directories above as well', async () => {
+    const outer = path.join(dir, 'outer');
+    const inner = path.join(outer, 'inner');
+    await mkdir(inner, { recursive: true, mode: 0o700 });
+    const deep = path.join(inner, 's.sock');
+    const server = net.createServer();
+    await new Promise<void>((resolve) => server.listen(deep, resolve));
+    cleanup.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
+    expect(await socketProblem(deep)).toBeUndefined();
+
+    // Others could rename `inner` away and put their own there.
+    await chmod(outer, 0o777);
+    expect(await socketProblem(deep)).toMatch(/outer can be written by other users/);
+    // Sticky, like /tmp: they cannot touch what is ours.
+    await chmod(outer, 0o1777);
+    expect(await socketProblem(deep)).toBeUndefined();
+    await chmod(outer, 0o755);
+
+    // A symbolic link on the way is followed and what it leads to is checked.
+    const via = path.join(dir, 'via');
+    await symlink(inner, via);
+    expect(await socketProblem(path.join(via, 's.sock'))).toBeUndefined();
+    await chmod(inner, 0o777);
+    expect(await socketProblem(path.join(via, 's.sock'))).toMatch(/inner can be written/);
+    await chmod(inner, 0o700);
+  });
+
+  it('accepts the default place', async () => {
+    expect(await socketProblem(defaultListenerPath(40002))).toBeUndefined();
+  });
+
+  it('does not connect to something that is not a socket', async () => {
+    await writeFile(socketPath, '');
+    const r = run('oneshot');
+    expect(await r.status).toBe(1);
+    expect(r.errors[0]).toMatch(/is not a socket/);
   });
 
   it('ends with an error when no helper listens', async () => {

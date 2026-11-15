@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.1.1 (2026-11-15)
+
+`tr-ai-intercom-notify` is stricter about what it reads and where from:
+
+- Every line from the socket must be a JSON object with at least a
+  `message` and a numeric `seq`. Otherwise the connection is closed and the
+  command ends with status 1, or tries again with `--reconnect`. Lines are
+  printed as compact JSON.
+- A `burst` is unrolled: its members are printed as lines of their own, each
+  checked the same way. With `--oneshot` the latest member is printed.
+- It connects only to a socket of the user who runs it, in a directory that
+  nobody else can write, below directories that others cannot rearrange.
+  This is decided from the directories, so there is no moment between
+  checking and connecting in which the path could be led elsewhere.
+- The helper warns when `--notification-listener-path` puts the socket in a
+  directory that others can write, since the command will refuse it.
+
 ## 1.1.0 (2026-11-15)
 
 - **Notification listener.** With `--notification-listener` the helper

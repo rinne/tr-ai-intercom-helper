@@ -131,6 +131,16 @@ export function listenerSink(logger: Logger, configuredPath?: string): ListenerS
         await checkOwnDirectory(dir);
       }
       assertUsablePath(target);
+      if (configuredPath) {
+        // tr-ai-intercom-notify applies this check and would refuse the socket.
+        const dirInfo = await lstat(path.dirname(target)).catch(() => undefined);
+        if (dirInfo && (dirInfo.mode & 0o022) !== 0) {
+          logger.warn(
+            'the directory of the notification listener can be written by other users; tr-ai-intercom-notify will not connect to a socket there. Use a directory of your own',
+            { directory: path.dirname(target) },
+          );
+        }
+      }
 
       // A socket file left behind by a helper that did not stop cleanly.
       const existing = await lstat(target).catch(() => undefined);
