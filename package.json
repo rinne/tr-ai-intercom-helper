@@ -1,0 +1,64 @@
+{
+  "name": "tr-ai-intercom-helper",
+  "version": "1.0.0",
+  "description": "Local wake-up helper for agents that use TR AI Intercom: proxies the agent's MCP traffic and turns the intercom's wake-up notifications into local events.",
+  "license": "MIT",
+  "author": "Timo J. Rinne <tri@iki.fi>",
+  "type": "module",
+  "bin": {
+    "tr-ai-intercom-helper": "dist/cli.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "MIT-RINNE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rinne/tr-ai-intercom-helper.git"
+  },
+  "homepage": "https://github.com/rinne/tr-ai-intercom-helper#readme",
+  "bugs": {
+    "url": "https://github.com/rinne/tr-ai-intercom-helper/issues"
+  },
+  "keywords": [
+    "mcp",
+    "ai",
+    "agent",
+    "intercom",
+    "proxy",
+    "notification",
+    "websocket"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "optist": "^3.0.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.0",
+    "@types/node": "^24.0.0",
+    "@types/ws": "^8.18.0",
+    "eslint": "^9.39.0",
+    "globals": "^16.0.0",
+    "prettier": "^3.6.0",
+    "typescript": "^5.9.0",
+    "typescript-eslint": "^8.46.0",
+    "vitest": "^3.2.0"
+  }
+}

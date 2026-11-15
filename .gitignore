@@ -1,0 +1,12 @@
+*~
+\#*\#
+node_modules
+package-lock.json
+pnpm-lock.yaml
+dist
+*.tsbuildinfo
+*.tgz
+.DS_Store
+.env
+coverage
+CLAUDE.md
