@@ -4,7 +4,11 @@
 
 - The README says when the helper is not needed: an agent whose platform
   has a webhook can be woken by the intercom itself (intercom 1.7.0), with
-  nothing running on the agent's machine. No change in the programs.
+  nothing running on the agent's machine.
+- The README says that sequence numbers may skip, which happens when the
+  agent also has a wake-up webhook on the intercom. The helper and
+  `tr-ai-intercom-notify` always handled that; tests now cover it. No
+  change in the programs.
 
 ## 1.1.1 (2026-11-15)
 

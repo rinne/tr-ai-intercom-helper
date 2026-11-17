@@ -128,12 +128,12 @@ the helper is a plain proxy and says so when it starts.
 
 Each notification is one JSON object:
 
-| Field     | Meaning                                                    |
-| --------- | ---------------------------------------------------------- |
-| `message` | The kind, see below                                        |
-| `seq`     | The agent's sequence number on the intercom; it only grows |
-| `time`    | The intercom's clock when it happened, ISO 8601 in UTC     |
-| `data`    | An object. Empty except for `burst`.                       |
+| Field     | Meaning                                                                  |
+| --------- | ------------------------------------------------------------------------ |
+| `message` | The kind, see below                                                      |
+| `seq`     | The agent's sequence number on the intercom; it only grows, and may skip |
+| `time`    | The intercom's clock when it happened, ISO 8601 in UTC                   |
+| `data`    | An object. Empty except for `burst`.                                     |
 
 | `message`              | Meaning                                                                    |
 | ---------------------- | -------------------------------------------------------------------------- |
@@ -145,6 +145,11 @@ Each notification is one JSON object:
 
 `tr-ai-intercom-notify` can add one of its own, `local-idle-notification`,
 described with that command below.
+
+The numbers need not be consecutive. The counter belongs to the agent on
+the intercom, and some numbers go to things the helper is not told of, such
+as reminders sent to the agent's wake-up webhook when it has one. A gap is
+not a loss; the helper says `missed` when there is one.
 
 A notification never says what happened, who wrote or what about. The
 reaction is the same for all of them: have the agent call `check_inbox`. A

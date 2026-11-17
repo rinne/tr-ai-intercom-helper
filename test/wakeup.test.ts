@@ -256,6 +256,43 @@ describe('notifications', () => {
     expect(helper!.wakeup.status().highest).toBe(4);
   });
 
+  it('takes numbers that skip as they come, without calling it a loss', async () => {
+    // The counter is the agent's: the intercom may give numbers to things
+    // this socket is not told of, such as reminders for the agent's webhook.
+    await start();
+    const first = await connected({ seq: 2, pending: false });
+    first.send(frame('inbox-activity', 3));
+    first.send(frame('inbox-activity', 7));
+    first.send(frame('shared-memory-update', 12));
+    await until(() => got.length === 3);
+    expect(got.map((n) => [n.message, n.seq])).toEqual([
+      ['inbox-activity', 3],
+      ['inbox-activity', 7],
+      ['shared-memory-update', 12],
+    ]);
+    expect(helper!.wakeup.status().highest).toBe(12);
+
+    // After a reconnect only a number beyond the highest seen counts as missed.
+    const next = stub.nextSocket();
+    first.ws.close(1011);
+    const second = await next;
+    await second.hello();
+    second.send({
+      message: 'hello',
+      seq: 12,
+      time: '2026-11-17T13:00:00.000Z',
+      data: { pending: true },
+    });
+    second.send(frame('inbox-activity', 20));
+    await until(() => got.length === 4);
+    expect(got.map((n) => n.message)).toEqual([
+      'inbox-activity',
+      'inbox-activity',
+      'shared-memory-update',
+      'inbox-activity',
+    ]);
+  });
+
   it('says nothing after a reconnect when the number is the same', async () => {
     await start();
     const first = await connected({ seq: 3, pending: false });

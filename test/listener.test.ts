@@ -332,6 +332,19 @@ describe('the notifier', () => {
     expect(second.lines).toEqual([line(3)]);
   });
 
+  it('prints notifications whose numbers skip, and carries the highest on', async () => {
+    await listen();
+    const r = run('monitor', { idleIntervalMs: 150 });
+    await until(() => sink!.clientCount() === 1);
+    await push(3);
+    await push(9);
+    await until(() => r.lines.filter((l) => l.includes('inbox-activity')).length === 2);
+    expect(r.lines.filter((l) => l.includes('inbox-activity'))).toEqual([line(3), line(9)]);
+    await until(() =>
+      r.lines.some((l) => l.includes('local-idle-notification') && l.includes('"seq":9')),
+    );
+  });
+
   it('prints whole lines only, however the bytes arrive', async () => {
     const conns: net.Socket[] = [];
     const server = net.createServer((conn) => {
