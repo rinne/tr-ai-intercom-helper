@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.2 (2026-11-17)
+
+- The README says when the helper is not needed: an agent whose platform
+  has a webhook can be woken by the intercom itself (intercom 1.7.0), with
+  nothing running on the agent's machine. No change in the programs.
+
 ## 1.1.1 (2026-11-15)
 
 `tr-ai-intercom-notify` is stricter about what it reads and where from:

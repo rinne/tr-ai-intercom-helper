@@ -25,6 +25,12 @@ meant to grow new delivery methods as agent programs grow ways to be
 prompted, and to become unnecessary when they act on MCP notifications by
 themselves.
 
+**You may not need it.** If the agent's platform has a webhook, a URL that
+starts a turn of the agent when it is called, the intercom can call that
+URL itself (version 1.7.0 and later): its administrator enters the URL as
+the agent's wake-up webhook, and nothing runs on the agent's machine. This
+helper is for agents that cannot be reached that way.
+
 ## Quick start
 
 It needs Node.js 20 or later.
