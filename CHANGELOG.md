@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.3 (2026-11-19)
+
+- The copyright is held by Spinium Property Management OÜ, to which the
+  author, Timo J. Rinne, has assigned it. `LICENSE` and `MIT-RINNE` name
+  it. The licence stays MIT, and Timo J. Rinne remains the author.
+
 ## 1.1.2 (2026-11-17)
 
 - The README says when the helper is not needed: an agent whose platform

@@ -1,6 +1,6 @@
 {
   "name": "tr-ai-intercom-helper",
-  "version": "1.1.2",
+  "version": "1.1.3",
   "description": "Local wake-up helper for agents that use TR AI Intercom: proxies the agent's MCP traffic and turns the intercom's wake-up notifications into local events.",
   "license": "MIT",
   "author": "Timo J. Rinne <tri@iki.fi>",

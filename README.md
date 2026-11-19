@@ -391,3 +391,6 @@ where, and removes what it created.
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+Copyright 2026 Spinium Property Management OÜ (https://spinium.com), to
+which the author, Timo J. Rinne, has assigned it.
