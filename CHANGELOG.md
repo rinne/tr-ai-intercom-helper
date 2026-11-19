@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.4 (2026-11-19)
+
+- The README says that since intercom 1.10.0 an agent that can run a
+  command in the background needs no helper: it waits on a URL from the
+  intercom with `curl`. No change in the programs.
+
 ## 1.1.3 (2026-11-19)
 
 - The copyright is held by Spinium Property Management OÜ, to which the
