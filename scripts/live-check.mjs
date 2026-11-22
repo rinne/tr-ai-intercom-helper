@@ -4,8 +4,13 @@
 // It creates two agents and a channel through the admin API, starts the
 // built helper with every delivery method, sends real traffic, and reports
 // whether each method fired and whether the console shows the helper. It
-// removes what it created. No agent program is involved: the "agents" here
-// are plain MCP requests.
+// removes the agents and the channel it created. No agent program is
+// involved: the "agents" here are plain MCP requests.
+//
+// On an intercom with exchanges (2.0 and later) the check works in one
+// exchange: the one --exchange names, or else one named "Helper live check"
+// that the user owns, which is created the first time and left in place. An
+// intercom without exchanges (1.x) is recognised and needs no option.
 //
 //   npm run build
 //   node scripts/live-check.mjs --intercom-url http://localhost:8080 \
@@ -43,7 +48,7 @@ const opt = new Optist()
     {
       longName: 'admin-username',
       environment: 'INTERCOM_HELPER_CHECK_OPT_ADMIN_USERNAME',
-      description: 'An admin user of the intercom (one without MFA).',
+      description: "A user of the intercom's console (one without two-step login).",
       hasArg: true,
       defaultValue: 'admin',
       optArgCb: ou.nonEmptyCb,
@@ -54,6 +59,14 @@ const opt = new Optist()
       description: 'The password of that user.',
       hasArg: true,
       required: true,
+      optArgCb: ou.nonEmptyCb,
+    },
+    {
+      longName: 'exchange',
+      environment: 'INTERCOM_HELPER_CHECK_OPT_EXCHANGE',
+      description:
+        'Short id of the exchange to work in, where the user may manage agents and channels. Without it, an exchange named "Helper live check" that the user owns, created when missing.',
+      hasArg: true,
       optArgCb: ou.nonEmptyCb,
     },
     {
@@ -109,6 +122,58 @@ async function admin(method, route, body) {
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(`${method} ${route}: ${res.status} ${JSON.stringify(data)}`);
   return data;
+}
+
+const OWN_EXCHANGE = 'Helper live check';
+/**
+ * The exchange to work in, as the prefix of its routes: '' on an intercom
+ * that has no exchanges (1.x), where the same routes are at the top.
+ */
+async function exchangePrefix() {
+  const me = await admin('GET', '/me');
+  const wanted = opt.value('exchange');
+  if (!Array.isArray(me.exchanges)) {
+    if (wanted) throw new Error('this intercom has no exchanges (1.x): leave --exchange out');
+    return { prefix: '', label: '' };
+  }
+  let exchange;
+  if (wanted) {
+    exchange = me.exchanges.find((x) => x.id === wanted);
+    if (!exchange) {
+      throw new Error(
+        `${me.user.username} cannot open an exchange with the short id "${wanted}"; they can open: ${
+          me.exchanges.map((x) => `${x.id} (${x.name})`).join(', ') || 'none'
+        }`,
+      );
+    }
+    const lacking = ['agents.manage', 'channels.manage'].filter(
+      (permission) => !exchange.permissions.includes(permission),
+    );
+    if (lacking.length > 0) {
+      throw new Error(
+        `in exchange ${exchange.id} (${exchange.name}) ${me.user.username} is ${exchange.role}, which may not add agents and channels: the check needs a manager or the owner`,
+      );
+    }
+  } else {
+    exchange =
+      me.exchanges.find((x) => x.name === OWN_EXCHANGE && x.role === 'owner') ??
+      (
+        await admin('POST', '/exchanges', {
+          name: OWN_EXCHANGE,
+          description: 'Used by the live check of tr-ai-intercom-helper. Safe to delete.',
+          mark: 'slate',
+        })
+      ).exchange;
+  }
+  if (exchange.suspended) {
+    throw new Error(
+      `exchange ${exchange.id} (${exchange.name}) is suspended: resume it, or name another with --exchange`,
+    );
+  }
+  return {
+    prefix: `/exchanges/${exchange.id}`,
+    label: `, exchange ${exchange.id} (${exchange.name})`,
+  };
 }
 
 // ---- an agent, as plain MCP requests ---------------------------------------
@@ -285,27 +350,35 @@ const numbers = (list) =>
 
 const tag = Math.random().toString(36).slice(2, 8);
 const created = { agents: [], channel: undefined };
+let x = '';
 let failed;
 try {
   await admin('POST', '/login', {
     username: opt.value('admin-username'),
     password: opt.value('admin-password'),
   });
-  const sender = await admin('POST', '/agents', { name: `check-sender-${tag}` });
-  const receiver = await admin('POST', '/agents', { name: `check-receiver-${tag}` });
+  const exchange = await exchangePrefix();
+  x = exchange.prefix;
+  const sender = await admin('POST', `${x}/agents`, { name: `check-sender-${tag}` });
+  const receiver = await admin('POST', `${x}/agents`, { name: `check-receiver-${tag}` });
   created.agents.push(sender.agent.id, receiver.agent.id);
   const channel = `check-${tag}`;
   created.channel = (
-    await admin('POST', '/channels', {
+    await admin('POST', `${x}/channels`, {
       name: channel,
       kind: 'pair',
       member_ids: [sender.agent.id, receiver.agent.id],
     })
   ).channel.id;
+  // Being put on a channel is news to an agent (intercom 1.10.0 and later).
+  // The receiver reads it now, so that the helper starts with nothing pending.
+  const settling = agentAt(INTERCOM, receiver.token);
+  await settling.open();
+  await settling.tool('check_inbox');
   const receiverView = async () =>
-    (await admin('GET', '/agents')).agents.find((a) => a.id === receiver.agent.id);
+    (await admin('GET', `${x}/agents`)).agents.find((a) => a.id === receiver.agent.id);
 
-  console.log(`Intercom ${INTERCOM}, console ${ADMIN}, working in ${dir}\n`);
+  console.log(`Intercom ${INTERCOM}, console ${ADMIN}${exchange.label}, working in ${dir}\n`);
   await startHelper();
   startNotifier();
   await until(
@@ -492,8 +565,8 @@ try {
   hook.close();
   local.close();
   try {
-    if (created.channel) await admin('DELETE', `/channels/${created.channel}`);
-    for (const id of created.agents) await admin('DELETE', `/agents/${id}`);
+    if (created.channel) await admin('DELETE', `${x}/channels/${created.channel}`);
+    for (const id of created.agents) await admin('DELETE', `${x}/agents/${id}`);
   } catch (err) {
     console.error(`Could not remove what the check created: ${err.message}`);
   }

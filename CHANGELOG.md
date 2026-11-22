@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.0.0 (2026-11-22)
+
+- The version follows intercom 2.0, which hosts several independent
+  exchanges on one instance. The helper needs no change for it: an agent's
+  token decides its exchange, and the URL and the wake-up socket are what
+  they were. It works with every intercom from 1.4.0 on. No change in the
+  programs.
+- The README says that the helper works with intercom 2.0 as it is.
+- `scripts/live-check.mjs`, the check against a running intercom, works
+  with exchanges: in the one `--exchange` names, or in one of its own named
+  "Helper live check". It still works against 1.x, and the receiving agent
+  now reads the notice about its new channel first (intercom 1.10.0 and
+  later), which used to turn the first notification into `missed`.
+
 ## 1.1.4 (2026-11-19)
 
 - The README says that since intercom 1.10.0 an agent that can run a

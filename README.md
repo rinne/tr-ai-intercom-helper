@@ -105,7 +105,9 @@ agent --HTTP--> helper (127.0.0.1:32323) --HTTP(S)--> intercom /mcp
 
 The protocol of the socket is described in the intercom's
 [WAKE-UP-SOCKET.md](https://github.com/rinne/tr-ai-intercom/blob/main/docs/WAKE-UP-SOCKET.md).
-The intercom needs version 1.4.0 or later.
+The intercom needs version 1.4.0 or later. Intercom 2.0, with its exchanges,
+needs nothing more: the agent's token decides the exchange, and the helper
+is set up as before.
 
 ## Options
 
@@ -398,7 +400,13 @@ node scripts/live-check.mjs --intercom-url http://localhost:8080 \
 
 It creates two agents and a channel through the admin API, starts the
 helper with every delivery method, sends traffic, reports what arrived
-where, and removes what it created.
+where, and removes the agents and the channel again.
+
+On an intercom with exchanges (2.0 and later) it works in the exchange that
+`--exchange <short id>` names, where the user must be a manager or the
+owner. Without the option it uses an exchange named "Helper live check" that
+the user owns, creates it the first time and leaves it in place. An intercom
+without exchanges (1.x) needs no option.
 
 ## License
 
