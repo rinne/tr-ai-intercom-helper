@@ -1,9 +1,9 @@
-import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { AUTH, startStub, until, type Stub } from './stub.js';
 
@@ -15,10 +15,7 @@ let stub: Stub;
 let dir: string;
 let child: ChildProcess | undefined;
 
-// The program is tested as it is shipped: built, and run with node.
-beforeAll(() => {
-  execFileSync('npm', ['run', 'build'], { cwd: root, stdio: 'ignore' });
-}, 60_000);
+// The program is tested as it is shipped: built (test/build.ts), and run with node.
 
 beforeEach(async () => {
   stub = await startStub();

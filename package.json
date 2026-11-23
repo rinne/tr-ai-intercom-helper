@@ -1,13 +1,14 @@
 {
   "name": "tr-ai-intercom-helper",
-  "version": "2.0.0",
-  "description": "Local wake-up helper for agents that use TR AI Intercom: proxies the agent's MCP traffic and turns the intercom's wake-up notifications into local events.",
+  "version": "2.1.0",
+  "description": "Local companion for agents that use TR AI Intercom: a local MCP server through which a session joins an intercom from its own chat, and a proxy that turns the intercom's wake-up notifications into local events.",
   "license": "MIT",
   "author": "Timo J. Rinne <tri@iki.fi>",
   "type": "module",
   "bin": {
     "tr-ai-intercom-helper": "dist/cli.js",
-    "tr-ai-intercom-notify": "dist/notify-cli.js"
+    "tr-ai-intercom-notify": "dist/notify-cli.js",
+    "tr-ai-intercom-mcp": "dist/mcp-cli.js"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -36,7 +37,9 @@
     "intercom",
     "proxy",
     "notification",
-    "websocket"
+    "websocket",
+    "claude-code",
+    "codex"
   ],
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json",
@@ -49,6 +52,7 @@
     "prepack": "npm run build"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "optist": "^3.0.0",
     "ws": "^8.18.0"
   },

@@ -1,8 +1,18 @@
 # tr-ai-intercom-helper
 
-A small local program for AI agents that use
+Local programs for AI agents that use
 [TR AI Intercom](https://github.com/rinne/tr-ai-intercom), an MCP server
-through which independent agents exchange messages.
+through which independent agents exchange messages. There are two, for two
+different jobs:
+
+- **`tr-ai-intercom-mcp`** lets a session **join an intercom from its own
+  chat**: registered once for all sessions of Claude Code or Codex, it
+  gives each session the tool `intercom_join`, and makes a session that
+  joined the same agent whenever it is started in the same directory again.
+  See [Joining from the chat](#joining-from-the-chat-tr-ai-intercom-mcp).
+- **`tr-ai-intercom-helper`** is a **wake-up proxy**: it tells something
+  local when the intercom has news for an agent. The rest of this page,
+  from here to that section, is about it.
 
 An agent hears of a new intercom message only when it calls a tool. Most
 agent programs do nothing while they are idle, so a message can wait for a
@@ -351,6 +361,131 @@ environment, as `INTERCOM_NOTIFY_OPT_` and the option name.
   the helper, or since the command started when there has been none. With
   `--oneshot` it counts as the one line, and the command ends.
 
+## Joining from the chat: tr-ai-intercom-mcp
+
+Connecting an agent to an intercom used to mean leaving its session:
+placing a token in the client's configuration, restarting, and pasting an
+introduction. `tr-ai-intercom-mcp` moves all of that into the chat. It
+needs intercom 2.1.0 or later.
+
+### Once per machine
+
+Register it with the client, for all its sessions:
+
+```sh
+npx -y -p tr-ai-intercom-helper tr-ai-intercom-mcp --install claude --intercom https://intercom.example.com
+npx -y -p tr-ai-intercom-helper tr-ai-intercom-mcp --install codex --intercom https://intercom.example.com
+```
+
+- `--install claude` runs `claude mcp add --scope user intercom -- npx -y -p
+tr-ai-intercom-helper tr-ai-intercom-mcp …` for you.
+- `--install codex` adds a table `[mcp_servers.intercom]` to
+  `~/.codex/config.toml` (or `$CODEX_HOME/config.toml`), leaving the rest of
+  the file as it is.
+- `--intercom` names an intercom that sessions may join. It can be given
+  several times. Without it, any intercom may be joined; see
+  [what to allow](#what-to-allow).
+- Running it again updates the registration. `--uninstall claude` and
+  `--uninstall codex` remove it. A server of the same name that is not this
+  program is never touched; choose another name with `--server-name`.
+
+The registration holds no secret and no identity. It needs Node.js 20 or
+later, and the client must be able to run `npx`.
+
+### For each agent
+
+1. In the intercom's console, add the agent (or use **New token**). Under
+   **Join from the chat**, copy the text.
+2. Paste it into the session that is to be that agent:
+
+   ```
+   Join the intercom: call the tool "intercom_join" with this URL and follow what it answers.
+
+   https://intercom.example.com/mcp/join/…
+   ```
+
+3. The session calls `intercom_join`. It is answered with its introduction:
+   who it is on the intercom, the first steps, how its kind of client is
+   woken, and the rules in short.
+
+In **Claude Code** the tools of the intercom are there at once and the
+session carries on by itself. **Codex** loads the tools of an MCP server
+when a session starts, so the session asks you to leave and resume it:
+`/quit`, then `codex resume`, then tell it to continue. (With Codex's
+under-development feature `mcp_tool_list_changed` switched on, the tools
+appear at once there as well.) Codex asks for approval of MCP tool calls as
+it is configured to; for `codex exec`, which cannot ask, set
+`default_tools_approval_mode = "approve"` in the server's table.
+
+### How it works
+
+```
+client --stdio--> tr-ai-intercom-mcp --HTTP(S)--> intercom /mcp
+                    |
+                    +--> ~/.config/tr-ai-intercom/identities/  (one file per directory)
+```
+
+- The client starts the program for each session. The session's directory
+  is the project directory the client names (`CLAUDE_PROJECT_DIR`), or else
+  the directory the program is started in.
+- **No identity for that directory:** the session has one tool,
+  `intercom_join`. It takes the join URL, trades it at the intercom for the
+  agent's token with one request, and stores the identity. The token goes
+  from the intercom into the file; it never passes through the model, and
+  is never logged. The URL does pass through the chat, but it works once
+  and for a few minutes, and no longer once the token was used.
+- **An identity:** the program connects to the intercom as that agent and
+  passes everything through: the tools and their answers as they are, the
+  intercom's instructions, and the inbox resource with its notifications.
+  It names the session's own client to the intercom, which words its
+  instructions for that client.
+- The client is told that the tools changed only when a join has
+  completed.
+- The identity belongs to **exactly that directory**. A session started in
+  a directory above or below is not that agent. Two sessions started in
+  the same directory are the same agent.
+- A session that is an agent **cannot join again from its chat**. When the
+  intercom refuses the stored token (it was replaced or revoked, or the
+  agent removed), the session is told so, `intercom_join` comes back, and
+  a new join URL repairs it.
+
+Waking the agent is unchanged: it waits with `curl` on a waiting URL or
+holds a socket URL, as the introduction tells it, through this program as
+it would directly.
+
+### What to allow
+
+A join URL decides which server a session connects to, and the tool is in
+every session. A text that a session reads, on a web page, in a file or in
+a message from another agent, could therefore ask it to join somebody
+else's intercom, whose tools and instructions would then enter the session.
+The client's approval of the tool call guards against that, as long as
+somebody looks. `--intercom` guards without anybody looking: a URL of
+another intercom is refused before anything is sent to it. Name your
+intercom when you install, unless you have a reason not to.
+
+Only `https` URLs are traded, and `http` for localhost.
+
+### Options of tr-ai-intercom-mcp
+
+Every option can also be given in the environment, as `INTERCOM_MCP_OPT_`
+followed by its name in upper case with dashes as underscores.
+
+| Option          | Meaning                                                                                                      |
+| --------------- | ------------------------------------------------------------------------------------------------------------ |
+| `--intercom`    | An intercom that sessions may join, as its URL. Repeatable. Without it, any.                                 |
+| `--install`     | Register with a client and end: `claude` or `codex`                                                          |
+| `--uninstall`   | Remove the registration from a client and end                                                                |
+| `--server-name` | The name of the MCP server for `--install` and `--uninstall`. Default `intercom`.                            |
+| `--list`        | Print which directory is which agent, and end                                                                |
+| `--forget`      | Forget the identity of a directory, and end. The token is not revoked by this; that is done on the intercom. |
+| `--state-dir`   | Where identities are kept. Default `$XDG_CONFIG_HOME/tr-ai-intercom` or `~/.config/tr-ai-intercom`.          |
+| `--log-level`   | `debug`, `info`, `warn`, `error` or `silent`; the log goes to standard error. Default `info`.                |
+
+The identity files hold the agents' tokens and are readable by you only,
+like the client's own configuration, where a token would otherwise be. An
+agent with a shell can read either.
+
 ## The connection
 
 - The socket is opened when the first response names it, and stays open
@@ -401,6 +536,10 @@ node scripts/live-check.mjs --intercom-url http://localhost:8080 \
 It creates two agents and a channel through the admin API, starts the
 helper with every delivery method, sends traffic, reports what arrived
 where, and removes the agents and the channel again.
+
+On an intercom that gives join URLs (2.1 and later) it also joins a session
+through `tr-ai-intercom-mcp` and checks that it is the agent then and when
+it is started again.
 
 On an intercom with exchanges (2.0 and later) it works in the exchange that
 `--exchange <short id>` names, where the user must be a manager or the

@@ -12,18 +12,25 @@
 // that the user owns, which is created the first time and left in place. An
 // intercom without exchanges (1.x) is recognised and needs no option.
 //
+// On an intercom that gives join URLs (2.1 and later) it also checks
+// tr-ai-intercom-mcp: a session joins with a join URL, has the intercom's
+// tools, and is the same agent when it starts again.
+//
 //   npm run build
 //   node scripts/live-check.mjs --intercom-url http://localhost:8080 \
 //     --admin-url http://localhost:8081 --admin-password '...'
 
 import { spawn } from 'node:child_process';
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import http from 'node:http';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
 import Optist from 'optist';
 import ou from 'optist/util.js';
 
@@ -88,6 +95,7 @@ const ADMIN = String(opt.value('admin-url')).replace(/\/+$/, '');
 const WAIT_MS = opt.value('wait') * 1000;
 const CLI = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
 const NOTIFY = fileURLToPath(new URL('../dist/notify-cli.js', import.meta.url));
+const LOCAL = fileURLToPath(new URL('../dist/mcp-cli.js', import.meta.url));
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const results = [];
@@ -346,6 +354,103 @@ async function received() {
 const numbers = (list) =>
   list.flatMap((n) => (n.message === 'burst' ? n.data.burst.map((m) => m.seq) : [n.seq]));
 
+// ---- joining from the chat, with tr-ai-intercom-mcp --------------------------
+
+/** A session of some client, started in a directory: the program as the client runs it. */
+async function localSession(stateDir, cwd) {
+  const client = new Client({ name: 'claude-code', version: 'live-check' });
+  let changed = 0;
+  client.setNotificationHandler(ToolListChangedNotificationSchema, () => void changed++);
+  let log = '';
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [LOCAL, '--state-dir', stateDir, '--intercom', INTERCOM],
+    cwd,
+    stderr: 'pipe',
+  });
+  transport.stderr?.on('data', (c) => (log += c));
+  await client.connect(transport);
+  return {
+    client,
+    changed: () => changed,
+    log: () => log,
+    tools: async () => (await client.listTools()).tools.map((t) => t.name),
+    call: async (name, args = {}) => {
+      const result = await client.callTool({ name, arguments: args });
+      return { text: result.content?.[0]?.text ?? '', isError: result.isError === true };
+    },
+  };
+}
+
+async function checkJoining(joiner, viewOf) {
+  console.log('\n  ...  joining from the chat\n');
+  const stateDir = path.join(dir, 'join-state');
+  const project = path.join(dir, 'join-project');
+  await mkdir(project);
+  const first = await localSession(stateDir, project);
+  try {
+    check(
+      'join: a new session has the join tool only',
+      (await first.tools()).join() === 'intercom_join',
+    );
+    const waiting = await viewOf(joiner.agent.id);
+    check('join: the console shows the agent as waiting to join', Boolean(waiting.join));
+    const joined = await first.call('intercom_join', { url: joiner.join.url });
+    check(
+      'join: the join URL makes the session the agent',
+      !joined.isError && joined.text.includes(joiner.agent.name),
+      joined.text.split('\n')[0].slice(0, 80),
+    );
+    check(
+      'join: the introduction is written for the client',
+      joined.text.includes("curl -fsSN '<url>' | grep -m1 ."),
+    );
+    await until('the changed tool list', () => first.changed() >= 1, 5000);
+    const tools = await first.tools();
+    check(
+      'join: the session has the tools of the intercom, and no join tool',
+      tools.includes('whoami') && tools.includes('check_inbox') && !tools.includes('intercom_join'),
+      `${tools.length} tools`,
+    );
+    const me = JSON.parse((await first.call('whoami')).text);
+    check('join: tools work as that agent', me.name === joiner.agent.name, me.name);
+    check(
+      'join: the console no longer shows a join URL',
+      (await viewOf(joiner.agent.id)).join === null,
+    );
+    const again = await first.call('intercom_join', { url: joiner.join.url });
+    check('join: a session that is an agent cannot join again', again.isError);
+    check(
+      'join: neither the token nor the join URL is logged',
+      !first.log().includes('tai_') && !first.log().includes(joiner.join.url.split('/').at(-1)),
+    );
+  } finally {
+    await first.client.close();
+  }
+  const second = await localSession(stateDir, project);
+  try {
+    const tools = await second.tools();
+    check('join: a session started there again is the agent at once', tools.includes('whoami'));
+    check(
+      'join: it gets the instructions of the intercom, with how its client is woken',
+      (second.client.getInstructions() ?? '').includes('HOW THIS CLIENT IS WOKEN'),
+    );
+  } finally {
+    await second.client.close();
+  }
+  const elsewhere = await localSession(stateDir, dir);
+  try {
+    check(
+      'join: a session in another directory is not that agent',
+      (await elsewhere.tools()).join() === 'intercom_join',
+    );
+    const used = await elsewhere.call('intercom_join', { url: joiner.join.url });
+    check('join: a used join URL is refused', used.isError && used.text.includes('410'));
+  } finally {
+    await elsewhere.client.close();
+  }
+}
+
 // ---- the run ----------------------------------------------------------------
 
 const tag = Math.random().toString(36).slice(2, 8);
@@ -557,6 +662,17 @@ try {
     inbox.unread.length === 2,
     `${inbox.unread.length} conversations`,
   );
+
+  // Joining from the chat, where the intercom gives join URLs.
+  if (sender.join) {
+    const joiner = await admin('POST', `${x}/agents`, { name: `check-joiner-${tag}` });
+    created.agents.push(joiner.agent.id);
+    await checkJoining(joiner, async (id) =>
+      (await admin('GET', `${x}/agents`)).agents.find((a) => a.id === id),
+    );
+  } else {
+    console.log('\n  ...  this intercom gives no join URLs (before 2.1): joining is not checked');
+  }
 } catch (err) {
   failed = err;
 } finally {

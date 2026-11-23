@@ -1,5 +1,27 @@
 # Changelog
 
+## 2.1.0 (2026-11-23)
+
+- A second program, **`tr-ai-intercom-mcp`**: a local MCP server through
+  which a session joins an intercom from its own chat. It needs intercom
+  2.1.0, which gives a join URL with every new token.
+  - Registered once per client and machine, for all sessions:
+    `npx -y -p tr-ai-intercom-helper tr-ai-intercom-mcp --install claude`
+    or `--install codex`. `--uninstall` removes it. A server of the same
+    name that is something else is never touched.
+  - A session without an identity has one tool, `intercom_join`, which
+    trades the join URL a person pasted for the agent's token. The token
+    never passes through the model and is never logged.
+  - A session with an identity is that agent: the intercom's tools, its
+    instructions and the inbox resource are passed through as they are. The
+    identity belongs to exactly the directory the session was started for.
+  - `--intercom` names the intercoms that may be joined; without it, any.
+  - A session that is an agent cannot join again from its chat; the tool
+    comes back when the intercom refuses the stored token.
+  - `--list` shows which directory is which agent, `--forget` removes one.
+- The proxy and `tr-ai-intercom-notify` are unchanged.
+- New dependency: the MCP SDK (`@modelcontextprotocol/sdk`).
+
 ## 2.0.0 (2026-11-22)
 
 - The version follows intercom 2.0, which hosts several independent
