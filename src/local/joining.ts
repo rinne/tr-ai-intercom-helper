@@ -135,3 +135,43 @@ export async function trade(
     introduction: typeof data.introduction === 'string' ? data.introduction : '',
   };
 }
+
+/** What became of the agent's token when a session left. */
+export type Returned =
+  /** The intercom revoked it. */
+  | 'revoked'
+  /** The intercom did not accept it any more. */
+  | 'invalid'
+  /** The intercom has no way of taking a token back (before 2.2). */
+  | 'unsupported'
+  /** The intercom could not be reached, or answered something else. */
+  | 'unreachable';
+
+/**
+ * Give an agent's token back to the intercom it belongs to, which revokes
+ * it. The opposite of trading a join URL.
+ */
+export async function giveBack(
+  mcpUrl: string,
+  token: string,
+  who: { program: string; client?: { name: string; version?: string } | undefined },
+  fetchFn: typeof fetch = fetch,
+): Promise<Returned> {
+  let res: Response;
+  try {
+    res = await fetchFn(new URL(mcpUrl.replace(/\/mcp\/?$/, '/mcp/leave')), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify(who),
+      redirect: 'error',
+      signal: AbortSignal.timeout(30_000),
+    });
+  } catch {
+    return 'unreachable';
+  }
+  await res.arrayBuffer().catch(() => undefined);
+  if (res.ok) return 'revoked';
+  if (res.status === 401) return 'invalid';
+  if (res.status === 404 || res.status === 405) return 'unsupported';
+  return 'unreachable';
+}

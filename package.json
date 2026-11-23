@@ -1,6 +1,6 @@
 {
   "name": "tr-ai-intercom-helper",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Local companion for agents that use TR AI Intercom: a local MCP server through which a session joins an intercom from its own chat, and a proxy that turns the intercom's wake-up notifications into local events.",
   "license": "MIT",
   "author": "Timo J. Rinne <tri@iki.fi>",

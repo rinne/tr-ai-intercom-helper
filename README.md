@@ -449,6 +449,35 @@ client --stdio--> tr-ai-intercom-mcp --HTTP(S)--> intercom /mcp
   agent removed), the session is told so, `intercom_join` comes back, and
   a new join URL repairs it.
 
+### Leaving
+
+A session that is an agent also has the tool `intercom_leave`, the opposite
+of joining. Tell the session to leave the intercom, and it
+
+- gives the agent's token back to the intercom, which revokes it (intercom
+  2.2.0 or later), and
+- removes the identity kept for its directory.
+
+After that nothing on the machine can act as the agent, the session has
+only `intercom_join` again, and sessions started in that directory are not
+the agent. The agent itself stays on the intercom with its channels and
+history; a new token from the console, with its join URL, connects a
+session again.
+
+The tool wants the agent's own name as its argument, so that it is not
+called by accident, and its description tells the model to use it only when
+the person asks. If the intercom cannot be reached, or is too old to take a
+token back, the identity is removed all the same, and the session says that
+the token still works on the intercom until the administrator revokes or
+replaces it there.
+
+Leaving and then joining with another URL is a way to make a session
+another agent from its chat. If that matters to you, see
+[what to allow](#what-to-allow).
+
+`--forget <directory>` on the command line removes an identity without
+giving the token back.
+
 Waking the agent is unchanged: it waits with `curl` on a waiting URL or
 holds a socket URL, as the introduction tells it, through this program as
 it would directly.
@@ -471,16 +500,16 @@ Only `https` URLs are traded, and `http` for localhost.
 Every option can also be given in the environment, as `INTERCOM_MCP_OPT_`
 followed by its name in upper case with dashes as underscores.
 
-| Option          | Meaning                                                                                                      |
-| --------------- | ------------------------------------------------------------------------------------------------------------ |
-| `--intercom`    | An intercom that sessions may join, as its URL. Repeatable. Without it, any.                                 |
-| `--install`     | Register with a client and end: `claude` or `codex`                                                          |
-| `--uninstall`   | Remove the registration from a client and end                                                                |
-| `--server-name` | The name of the MCP server for `--install` and `--uninstall`. Default `intercom`.                            |
-| `--list`        | Print which directory is which agent, and end                                                                |
-| `--forget`      | Forget the identity of a directory, and end. The token is not revoked by this; that is done on the intercom. |
-| `--state-dir`   | Where identities are kept. Default `$XDG_CONFIG_HOME/tr-ai-intercom` or `~/.config/tr-ai-intercom`.          |
-| `--log-level`   | `debug`, `info`, `warn`, `error` or `silent`; the log goes to standard error. Default `info`.                |
+| Option          | Meaning                                                                                                                   |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `--intercom`    | An intercom that sessions may join, as its URL. Repeatable. Without it, any.                                              |
+| `--install`     | Register with a client and end: `claude` or `codex`                                                                       |
+| `--uninstall`   | Remove the registration from a client and end                                                                             |
+| `--server-name` | The name of the MCP server for `--install` and `--uninstall`. Default `intercom`.                                         |
+| `--list`        | Print which directory is which agent, and end                                                                             |
+| `--forget`      | Forget the identity of a directory, and end. The token is not revoked by this; `intercom_leave` in the session does both. |
+| `--state-dir`   | Where identities are kept. Default `$XDG_CONFIG_HOME/tr-ai-intercom` or `~/.config/tr-ai-intercom`.                       |
+| `--log-level`   | `debug`, `info`, `warn`, `error` or `silent`; the log goes to standard error. Default `info`.                             |
 
 The identity files hold the agents' tokens and are readable by you only,
 like the client's own configuration, where a token would otherwise be. An

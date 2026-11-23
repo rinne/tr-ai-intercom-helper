@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.2.0 (2026-11-23)
+
+- `tr-ai-intercom-mcp` has the tool **`intercom_leave`**, the opposite of
+  `intercom_join`: a session that is an agent gives the agent's token back
+  to the intercom, which revokes it (intercom 2.2.0 or later), and the
+  identity kept for its directory is removed. The session has only
+  `intercom_join` again, and nothing on the machine can act as the agent.
+  - It takes the agent's own name as its argument, so that it is not called
+    by accident.
+  - With an older intercom, or one that cannot be reached, the identity is
+    removed all the same and the session says that the token still works on
+    the intercom.
+  - A session whose token the intercom has refused is offered both tools:
+    join again, or leave.
+
 ## 2.1.0 (2026-11-23)
 
 - A second program, **`tr-ai-intercom-mcp`**: a local MCP server through

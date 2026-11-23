@@ -14,7 +14,8 @@
 //
 // On an intercom that gives join URLs (2.1 and later) it also checks
 // tr-ai-intercom-mcp: a session joins with a join URL, has the intercom's
-// tools, and is the same agent when it starts again.
+// tools, and is the same agent when it starts again; and, on an intercom
+// that takes a token back (2.2 and later), that it can leave again.
 //
 //   npm run build
 //   node scripts/live-check.mjs --intercom-url http://localhost:8080 \
@@ -409,7 +410,10 @@ async function checkJoining(joiner, viewOf) {
     const tools = await first.tools();
     check(
       'join: the session has the tools of the intercom, and no join tool',
-      tools.includes('whoami') && tools.includes('check_inbox') && !tools.includes('intercom_join'),
+      tools.includes('whoami') &&
+        tools.includes('check_inbox') &&
+        tools.includes('intercom_leave') &&
+        !tools.includes('intercom_join'),
       `${tools.length} tools`,
     );
     const me = JSON.parse((await first.call('whoami')).text);
@@ -448,6 +452,35 @@ async function checkJoining(joiner, viewOf) {
     check('join: a used join URL is refused', used.isError && used.text.includes('410'));
   } finally {
     await elsewhere.client.close();
+  }
+
+  // Leaving: the opposite of joining.
+  const third = await localSession(stateDir, project);
+  try {
+    const wrong = await third.call('intercom_leave', { agent: 'somebody-else' });
+    check('leave: it needs the name of the agent', wrong.isError);
+    const left = await third.call('intercom_leave', { agent: joiner.agent.name });
+    const revoked = left.text.includes('The intercom revoked the token');
+    check(
+      'leave: the session is no longer the agent',
+      !left.isError && (await third.tools()).join() === 'intercom_join',
+      revoked ? 'token revoked' : 'this intercom cannot take a token back (before 2.2)',
+    );
+    if (revoked) {
+      const view = await viewOf(joiner.agent.id);
+      check('leave: the console shows the agent without a token', view.has_token === false);
+    }
+  } finally {
+    await third.client.close();
+  }
+  const fourth = await localSession(stateDir, project);
+  try {
+    check(
+      'leave: a session started there afterwards is not the agent',
+      (await fourth.tools()).join() === 'intercom_join',
+    );
+  } finally {
+    await fourth.client.close();
   }
 }
 

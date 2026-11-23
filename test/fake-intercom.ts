@@ -53,6 +53,10 @@ export interface FakeIntercom {
   calls: Record<string, number>;
   /** What the join endpoint answers with instead of joining, when set. */
   refuseJoin?: { status: number; body: string };
+  /** False for an intercom that cannot take a token back (before 2.2). */
+  takesBack: boolean;
+  /** Bodies of the leave requests that were accepted, in order. */
+  leaves: unknown[];
   close(): Promise<void>;
 }
 
@@ -94,6 +98,8 @@ export async function startFakeIntercom(agentName = 'builder'): Promise<FakeInte
     },
     clients: [],
     joins: [],
+    takesBack: true,
+    leaves: [],
     requests: [],
     calls: {},
     close: () =>
@@ -208,6 +214,26 @@ export async function startFakeIntercom(agentName = 'builder'): Promise<FakeInte
             server_version: '0.0.0',
           }),
         );
+        return;
+      }
+
+      if (path === '/mcp/leave' && fake.takesBack) {
+        if (req.method !== 'POST') {
+          res.writeHead(405, { Allow: 'POST' }).end();
+          return;
+        }
+        if (req.headers.authorization !== `Bearer ${fake.token}`) {
+          res.writeHead(401).end('Missing or invalid bearer token.\n');
+          return;
+        }
+        const body = await readBody(req);
+        fake.leaves.push(body ? JSON.parse(body) : null);
+        // Revoked: no token works until a new one is issued.
+        fake.token = `revoked-${randomUUID()}`;
+        fake.forgetSessions();
+        res
+          .writeHead(200, { 'Content-Type': 'application/json' })
+          .end(JSON.stringify({ left: true, agent: fake.agent }));
         return;
       }
 

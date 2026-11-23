@@ -20,6 +20,9 @@ import { until } from './stub.js';
 const root = fileURLToPath(new URL('..', import.meta.url));
 const program = path.join(root, 'dist', 'mcp-cli.js');
 
+/** What a session that is an agent has: the intercom's tools, and the way out. */
+const TOOLS = ['whoami', 'picture', 'slow', 'intercom_leave'];
+
 let fake: FakeIntercom;
 let tmp: string;
 let state: string;
@@ -173,7 +176,7 @@ describe('joining', () => {
 
     // The tool list changed, announced after the join and once more.
     await until(() => s.changed() >= 2, 5000);
-    expect(await s.tools()).toEqual(['whoami', 'picture', 'slow']);
+    expect(await s.tools()).toEqual(TOOLS);
 
     // Calls and their answers pass through as they are.
     const who = await s.call('whoami', { hello: 'there' });
@@ -210,6 +213,7 @@ describe('joining', () => {
     const s = await session();
     await s.call('intercom_join', { url: fake.joinUrl() });
     expect(await s.tools()).not.toContain('intercom_join');
+    expect(await s.tools()).toContain('intercom_leave');
     const again = await s.call('intercom_join', { url: fake.joinUrl() });
     expect(again.isError).toBe(true);
     expect(again.text).toContain('already the intercom agent "builder"');
@@ -243,7 +247,7 @@ describe('a session that starts as an agent', () => {
       'RULES OF THE FAKE INTERCOM, worded for the client "codex-mcp-client".',
     );
     expect(fake.clients).toEqual(['codex-mcp-client']);
-    expect(await s.tools()).toEqual(['whoami', 'picture', 'slow']);
+    expect(await s.tools()).toEqual(TOOLS);
     expect(JSON.parse((await s.call('whoami')).text).name).toBe('builder');
     expect(fake.joins).toHaveLength(1);
   });
@@ -257,7 +261,7 @@ describe('a session that starts as an agent', () => {
 
   it('takes the directory from CLAUDE_PROJECT_DIR when the client names one', async () => {
     const s = await session({ cwd: tmp, env: { CLAUDE_PROJECT_DIR: project } });
-    expect(await s.tools()).toEqual(['whoami', 'picture', 'slow']);
+    expect(await s.tools()).toEqual(TOOLS);
   });
 
   it('passes the inbox resource and its notifications on', async () => {
@@ -309,12 +313,12 @@ describe('a session that starts as an agent', () => {
     expect(refused.text).toContain('no longer accepts the credentials of the agent "builder"');
     expect(refused.text).toContain('intercom_join');
     await until(() => s.changed() >= 1, 5000);
-    expect(await s.tools()).toEqual(['intercom_join']);
+    expect(await s.tools()).toEqual(['intercom_join', 'intercom_leave']);
 
     // A new join URL from the person repairs it, in the same session.
     const res = await s.call('intercom_join', { url });
     expect(res.isError).toBe(false);
-    expect(await s.tools()).toEqual(['whoami', 'picture', 'slow']);
+    expect(await s.tools()).toEqual(TOOLS);
     expect(JSON.parse((await s.call('whoami')).text).name).toBe('builder');
     expect(s.log()).not.toContain(fake.token);
   });
@@ -323,7 +327,7 @@ describe('a session that starts as an agent', () => {
     fake.rotate();
     const s = await session();
     expect(s.client.getInstructions()).toContain('no longer accepts its credentials');
-    expect(await s.tools()).toEqual(['intercom_join']);
+    expect(await s.tools()).toEqual(['intercom_join', 'intercom_leave']);
   });
 
   it('starts and says so when the intercom cannot be reached', async () => {
@@ -333,8 +337,119 @@ describe('a session that starts as an agent', () => {
     const res = await s.call('whoami');
     expect(res.isError).toBe(true);
     expect(res.text).toContain('could not be reached');
-    expect(await s.tools()).toEqual([]);
+    expect(await s.tools()).toEqual(['intercom_leave']);
     fake = await startFakeIntercom();
+  });
+});
+
+describe('leaving', () => {
+  const identities = (): string[] => {
+    try {
+      return readdirSync(path.join(state, 'identities'));
+    } catch {
+      return [];
+    }
+  };
+  beforeEach(async () => {
+    const s = await session();
+    await s.call('intercom_join', { url: fake.joinUrl() });
+    await s.client.close();
+  });
+
+  it('is not offered to a session that has not joined', async () => {
+    const other = path.join(tmp, 'other');
+    mkdirSync(other);
+    const s = await session({ cwd: other });
+    expect(await s.tools()).toEqual(['intercom_join']);
+    const res = await s.call('intercom_leave', { agent: 'builder' });
+    expect(res).toEqual({ text: 'This session is not connected to an intercom.', isError: true });
+  });
+
+  it('needs the name of the agent, so that it is meant', async () => {
+    const s = await session();
+    for (const args of [{}, { agent: '' }, { agent: 'somebody-else' }]) {
+      const res = await s.call('intercom_leave', args);
+      expect(res.isError).toBe(true);
+      expect(res.text).toContain('Nothing was changed');
+    }
+    expect(fake.leaves).toEqual([]);
+    expect(identities()).toHaveLength(1);
+    expect(JSON.parse((await s.call('whoami')).text).name).toBe('builder');
+  });
+
+  it('removes the identity, gives the token back, and leaves the session unjoined', async () => {
+    const s = await session({ name: 'codex-mcp-client' });
+    const token = fake.token;
+    const res = await s.call('intercom_leave', { agent: 'builder' });
+    expect(res.isError).toBe(false);
+    expect(res.text).toContain('no longer the agent "builder"');
+    expect(res.text).toContain('The intercom revoked the token');
+    expect(res.text).toContain('Stop any wake-up wait or watcher');
+    expect(fake.leaves).toEqual([
+      {
+        program: expect.stringMatching(/^tr-ai-intercom-mcp\//),
+        client: { name: 'codex-mcp-client', version: '9.9.9' },
+      },
+    ]);
+    expect(fake.token).not.toBe(token);
+    expect(identities()).toEqual([]);
+
+    // The session is told that its tools changed, and is as before joining.
+    await until(() => s.changed() >= 2, 5000);
+    expect(await s.tools()).toEqual(['intercom_join']);
+    const after = await s.call('whoami');
+    expect(after.isError).toBe(true);
+    expect(after.text).toContain('not connected');
+    expect(s.log()).toContain('"msg":"left"');
+    expect(s.log()).not.toContain(token);
+
+    // So is a session started there afterwards.
+    const next = await session();
+    expect(next.client.getInstructions()).toContain('not connected to an intercom');
+    expect(await next.tools()).toEqual(['intercom_join']);
+  });
+
+  it('can be followed by a new join, with a new token', async () => {
+    const s = await session();
+    await s.call('intercom_leave', { agent: 'builder' });
+    const res = await s.call('intercom_join', { url: fake.rotate() });
+    expect(res.isError).toBe(false);
+    expect(await s.tools()).toEqual(TOOLS);
+    expect(JSON.parse((await s.call('whoami')).text).name).toBe('builder');
+  });
+
+  it('removes the identity also when the intercom cannot take the token back', async () => {
+    fake.takesBack = false;
+    const old = await session();
+    const kept = await old.call('intercom_leave', { agent: 'builder' });
+    expect(kept.isError).toBe(false);
+    expect(kept.text).toContain('cannot take a token back');
+    expect(kept.text).toContain('still works there');
+    expect(identities()).toEqual([]);
+    expect(await old.tools()).toEqual(['intercom_join']);
+  });
+
+  it('removes the identity also when the intercom cannot be reached', async () => {
+    const s = await session();
+    await s.tools();
+    await fake.close();
+    const res = await s.call('intercom_leave', { agent: 'builder' });
+    expect(res.isError).toBe(false);
+    expect(res.text).toContain('could not be reached');
+    expect(res.text).toContain('was not revoked');
+    expect(identities()).toEqual([]);
+    fake = await startFakeIntercom();
+  });
+
+  it('clears an identity the intercom has already refused', async () => {
+    fake.rotate();
+    const s = await session();
+    expect(await s.tools()).toEqual(['intercom_join', 'intercom_leave']);
+    const res = await s.call('intercom_leave', { agent: 'builder' });
+    expect(res.isError).toBe(false);
+    expect(res.text).toContain('no longer accepted the token');
+    expect(identities()).toEqual([]);
+    expect(await s.tools()).toEqual(['intercom_join']);
   });
 });
 
