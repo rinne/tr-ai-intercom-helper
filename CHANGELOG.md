@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.2.2 (2026-11-24)
+
+- `tr-ai-intercom-mcp` takes **`--codex-command`** and **`--grok-command`**
+  beside `--claude-command`, so that the way each client is started on a
+  machine can be stated once, for example in the environment.
+  - `--codex-command` (default `codex`) is not run: Codex is registered in
+    its configuration file. It is named in the advice that `--install codex`
+    prints.
+  - `--grok-command` (default `grok`) is reserved and has no effect: there
+    is no registration with Grok yet.
+
 ## 2.2.1 (2026-11-24)
 
 - `tr-ai-intercom-mcp --install claude` works where Claude Code is not

@@ -16,6 +16,11 @@ export type McpClient = (typeof MCP_CLIENTS)[number];
 const clientCb = (s: string): string | undefined =>
   (MCP_CLIENTS as readonly string[]).includes(s) ? s : undefined;
 
+/** A command with its arguments, separated by spaces. */
+const commandCb = (s: string): string | undefined => (s.trim() ? s.trim() : undefined);
+/** The words of such a command. */
+export const commandWords = (command: string): string[] => command.trim().split(/\s+/);
+
 export const MCP_OPTIONS: OptDef[] = [
   {
     longName: 'intercom',
@@ -66,7 +71,25 @@ export const MCP_OPTIONS: OptDef[] = [
       'How Claude Code is started on this machine, for --install claude and --uninstall claude: a command with its arguments, separated by spaces. Where Claude Code is run through npx and not installed: "npx -y @anthropic-ai/claude-code".',
     hasArg: true,
     defaultValue: 'claude',
-    optArgCb: (s: string) => (s.trim() ? s.trim() : undefined),
+    optArgCb: commandCb,
+  },
+  {
+    longName: 'codex-command',
+    environment: 'INTERCOM_MCP_OPT_CODEX_COMMAND',
+    description:
+      'How Codex is started on this machine: a command with its arguments, separated by spaces. It is not run at present, since Codex is registered in its configuration file; it is only named in what --install codex prints.',
+    hasArg: true,
+    defaultValue: 'codex',
+    optArgCb: commandCb,
+  },
+  {
+    longName: 'grok-command',
+    environment: 'INTERCOM_MCP_OPT_GROK_COMMAND',
+    description:
+      "How Grok's terminal client is started on this machine: a command with its arguments, separated by spaces. Reserved: this program does not register itself with Grok yet, and the option has no effect.",
+    hasArg: true,
+    defaultValue: 'grok',
+    optArgCb: commandCb,
   },
   {
     longName: 'list',

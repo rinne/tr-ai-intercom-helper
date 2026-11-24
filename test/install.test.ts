@@ -164,8 +164,10 @@ describe('--install and --uninstall', () => {
       codexTable('intercom', ['https://intercom.example.com']),
     );
 
-    const updated = run(['--install', 'codex'], env);
+    // The way Codex is started here is named in the advice, and changes nothing else.
+    const updated = run(['--install', 'codex', '--codex-command', ' npx -y some-codex '], env);
     expect(updated.stdout).toContain('Updated the MCP server "intercom"');
+    expect(updated.stdout).toContain('/quit, then "npx -y some-codex resume"');
     expect(updated.stdout).toContain('It may join any intercom');
     expect(readFileSync(file, 'utf8')).toBe(OURS);
 
@@ -352,5 +354,9 @@ describe('--install and --uninstall', () => {
 
   it('accepts claude and codex only', () => {
     expect(run(['--install', 'cursor']).status).not.toBe(0);
+    // A command for Grok is taken already, but there is nothing to install there yet.
+    expect(run(['--install', 'grok', '--grok-command', 'npx -y some-grok']).status).not.toBe(0);
+    expect(run(['--list', '--grok-command', 'npx -y some-grok']).status).toBe(0);
+    expect(run(['--list', '--grok-command', ' ']).status).not.toBe(0);
   });
 });

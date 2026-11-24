@@ -6,7 +6,7 @@ import { IdentityStore, canonical, defaultStateDir, sessionDirectory } from './l
 import { InstallError, install, uninstall } from './local/install.js';
 import { startLocalServer } from './local/server.js';
 import { createLogger } from './logger.js';
-import { MCP_OPTIONS, type McpClient } from './mcp-options.js';
+import { MCP_OPTIONS, type McpClient, commandWords } from './mcp-options.js';
 import { VERSION } from './version.js';
 
 // tr-ai-intercom-mcp: the intercom as a local MCP server that a client
@@ -29,9 +29,13 @@ async function main(): Promise<void> {
   const name = value<string>('server-name');
   const say = (line: string): void => void process.stdout.write(`${line}\n`);
 
-  const claudeCommand = value<string>('claude-command').split(/\s+/);
+  // How the clients are started here. --grok-command is taken and not used yet.
+  const claudeCommand = commandWords(value<string>('claude-command'));
+  const codexCommand = commandWords(value<string>('codex-command'));
   const installing = value<McpClient | undefined>('install');
-  if (installing) return say(await install(installing, { name, intercoms, claudeCommand }));
+  if (installing) {
+    return say(await install(installing, { name, intercoms, claudeCommand, codexCommand }));
+  }
   const uninstalling = value<McpClient | undefined>('uninstall');
   if (uninstalling) return say(await uninstall(uninstalling, { name, claudeCommand }));
 

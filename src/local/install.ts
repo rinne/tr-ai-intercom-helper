@@ -39,12 +39,16 @@ export interface InstallOptions {
   intercoms: string[];
   /** How Claude Code is started here: a command and its arguments. Default: claude. */
   claudeCommand?: string[];
+  /** How Codex is started here. It is not run, only named in what is printed. */
+  codexCommand?: string[];
   env?: NodeJS.ProcessEnv;
 }
 
 /** The command of Claude Code where it is installed as a program. */
 export const CLAUDE_COMMAND = ['claude'];
-/** The same where it is run through npx and never installed. */
+/** The command of Codex where it is installed as a program. */
+export const CODEX_COMMAND = ['codex'];
+/** Claude Code where it is run through npx and never installed. */
 const CLAUDE_BY_NPX = 'npx -y @anthropic-ai/claude-code';
 
 // ---- Codex --------------------------------------------------------------------
@@ -199,7 +203,7 @@ export async function install(client: McpClient, options: InstallOptions): Promi
     const file = codexConfigPath(env);
     const edited = editCodexConfig(readCodex(file), name, codexTable(name, intercoms));
     writeCodex(file, edited.content);
-    return `${edited.was === 'ours' ? 'Updated' : 'Added'} the MCP server "${name}" in ${file}.\n${allowed}\n${SESSIONS}\nIn Codex the tools of the intercom appear when a session is next started: after joining, leave the session and resume it (/quit, then "codex resume").`;
+    return `${edited.was === 'ours' ? 'Updated' : 'Added'} the MCP server "${name}" in ${file}.\n${allowed}\n${SESSIONS}\nIn Codex the tools of the intercom appear when a session is next started: after joining, leave the session and resume it (/quit, then "${typed(options.codexCommand ?? CODEX_COMMAND)} resume").`;
   }
   const existing = claudeUserServer(name, env);
   if (existing !== undefined) {
