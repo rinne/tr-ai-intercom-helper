@@ -37,8 +37,15 @@ export class InstallError extends Error {}
 export interface InstallOptions {
   name: string;
   intercoms: string[];
+  /** How Claude Code is started here: a command and its arguments. Default: claude. */
+  claudeCommand?: string[];
   env?: NodeJS.ProcessEnv;
 }
+
+/** The command of Claude Code where it is installed as a program. */
+export const CLAUDE_COMMAND = ['claude'];
+/** The same where it is run through npx and never installed. */
+const CLAUDE_BY_NPX = 'npx -y @anthropic-ai/claude-code';
 
 // ---- Codex --------------------------------------------------------------------
 
@@ -139,21 +146,40 @@ function claudeUserServer(name: string, env: NodeJS.ProcessEnv): unknown {
   }
 }
 
-async function claude(args: string[], env: NodeJS.ProcessEnv): Promise<string> {
-  try {
-    const { stdout } = await run('claude', args, { env, timeout: 60_000 });
-    return stdout.trim();
-  } catch (err) {
-    const e = err as NodeJS.ErrnoException & { stderr?: string; stdout?: string };
-    if (e.code === 'ENOENT') {
+/** An argument as it is typed in a shell. */
+const quoted = (arg: string): string =>
+  /^[A-Za-z0-9_./:=@%+,-]+$/.test(arg) ? arg : `'${arg.replace(/'/g, `'\\''`)}'`;
+const typed = (words: string[]): string => words.map(quoted).join(' ');
+
+/**
+ * Tells Claude Code something, one call of its command after the other.
+ * When the command is not there, the error says exactly what was to be run,
+ * so that it can be done by hand.
+ */
+async function claude(
+  calls: string[][],
+  env: NodeJS.ProcessEnv,
+  command: string[] = CLAUDE_COMMAND,
+): Promise<void> {
+  const [program, ...leading] = command as [string, ...string[]];
+  for (const args of calls) {
+    try {
+      await run(program, [...leading, ...args], { env, timeout: 180_000 });
+    } catch (err) {
+      const e = err as NodeJS.ErrnoException & { stderr?: string; stdout?: string };
+      if (e.code === 'ENOENT') {
+        throw new InstallError(
+          `The command "${program}" was not found, and nothing was changed.\n` +
+            'If Claude Code is started in another way on this machine, say how and run this again, for example:\n' +
+            `  --claude-command "${CLAUDE_BY_NPX}"\n` +
+            `Or do it by hand, with whatever starts Claude Code in place of "${typed(command)}":\n` +
+            calls.map((c) => `  ${typed([...command, ...c])}`).join('\n'),
+        );
+      }
       throw new InstallError(
-        'The command "claude" was not found. Install Claude Code, or register by hand:\n' +
-          `claude mcp add --scope user <name> -- npx -y -p tr-ai-intercom-helper ${PROGRAM}`,
+        `"${typed([...command, ...args])}" failed: ${(e.stderr || e.stdout || e.message).trim()}`,
       );
     }
-    throw new InstallError(
-      `"claude ${args.join(' ')}" failed: ${(e.stderr || e.stdout || e.message).trim()}`,
-    );
   }
 }
 
@@ -182,16 +208,22 @@ export async function install(client: McpClient, options: InstallOptions): Promi
         `Claude Code already has a user-level MCP server named "${name}" that is not ${PROGRAM}; it was left as it is. Remove it yourself (claude mcp remove ${name} -s user), or choose another name with --server-name.`,
       );
     }
-    await claude(['mcp', 'remove', name, '-s', 'user'], env);
   }
   const { command, args } = launch(intercoms);
-  await claude(['mcp', 'add', '--scope', 'user', name, '--', command, ...args], env);
+  await claude(
+    [
+      ...(existing === undefined ? [] : [['mcp', 'remove', name, '-s', 'user']]),
+      ['mcp', 'add', '--scope', 'user', name, '--', command, ...args],
+    ],
+    env,
+    options.claudeCommand,
+  );
   return `${existing === undefined ? 'Added' : 'Updated'} the MCP server "${name}" for all your Claude Code sessions.\n${allowed}\n${SESSIONS}`;
 }
 
 export async function uninstall(
   client: McpClient,
-  options: Pick<InstallOptions, 'name' | 'env'>,
+  options: Pick<InstallOptions, 'name' | 'env' | 'claudeCommand'>,
 ): Promise<string> {
   const env = options.env ?? process.env;
   const { name } = options;
@@ -209,6 +241,6 @@ export async function uninstall(
       `The user-level MCP server "${name}" of Claude Code is not ${PROGRAM}; it was left as it is.`,
     );
   }
-  await claude(['mcp', 'remove', name, '-s', 'user'], env);
+  await claude([['mcp', 'remove', name, '-s', 'user']], env, options.claudeCommand);
   return `Removed the MCP server "${name}" from Claude Code. The identities of sessions are kept; see --list and --forget.`;
 }

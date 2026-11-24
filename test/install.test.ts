@@ -5,6 +5,8 @@ import {
   mkdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -276,17 +278,76 @@ describe('--install and --uninstall', () => {
     );
   });
 
-  it('says how to register by hand when Claude Code is not installed', () => {
-    const res = run(['--install', 'claude'], {
-      PATH:
-        path.dirname(process.execPath) === '/usr/bin'
-          ? '/nonexistent'
-          : path.dirname(process.execPath),
-      CLAUDE_CONFIG_DIR: tmp,
-    });
-    if (res.status === 0) return; // a claude command sits beside node on this machine
+  /** An environment in which no claude command is found. */
+  const withoutClaude = (): Record<string, string> => {
+    const bin = path.join(tmp, 'only-node');
+    mkdirSync(bin, { recursive: true });
+    if (!existsSync(path.join(bin, 'node'))) symlinkSync(process.execPath, path.join(bin, 'node'));
+    return { PATH: bin, CLAUDE_CONFIG_DIR: tmp };
+  };
+
+  it('says exactly what to run by hand when the claude command is not found', () => {
+    const res = run(
+      ['--install', 'claude', '--intercom', 'https://intercom.example.com'],
+      withoutClaude(),
+    );
     expect(res.status).toBe(2);
-    expect(res.stderr).toContain('The command "claude" was not found');
+    expect(res.stderr).toContain('The command "claude" was not found, and nothing was changed.');
+    expect(res.stderr).toContain('--claude-command "npx -y @anthropic-ai/claude-code"');
+    expect(res.stderr).toContain(
+      '\n  claude mcp add --scope user intercom -- npx -y -p tr-ai-intercom-helper tr-ai-intercom-mcp --intercom https://intercom.example.com\n',
+    );
+    expect(res.stderr).not.toContain('<name>');
+
+    // An update is two commands, and a chosen name is the one shown.
+    writeFileSync(
+      path.join(tmp, '.claude.json'),
+      JSON.stringify({ mcpServers: { relay: { command: 'npx', args: ['tr-ai-intercom-mcp'] } } }),
+    );
+    const update = run(['--install', 'claude', '--server-name', 'relay'], withoutClaude());
+    expect(update.stderr).toContain(
+      '\n  claude mcp remove relay -s user\n  claude mcp add --scope user relay -- npx -y -p tr-ai-intercom-helper tr-ai-intercom-mcp\n',
+    );
+    const removal = run(['--uninstall', 'claude', '--server-name', 'relay'], withoutClaude());
+    expect(removal.status).toBe(2);
+    expect(removal.stderr).toContain('\n  claude mcp remove relay -s user\n');
+  });
+
+  it('starts Claude Code the way --claude-command says', () => {
+    const claude = fakeClaude();
+    const runner = path.join(tmp, 'bin', 'runner');
+    renameSync(path.join(tmp, 'bin', 'claude'), runner);
+    const env = {
+      ...withoutClaude(),
+      INTERCOM_MCP_OPT_CLAUDE_COMMAND: `${runner}  -y  some-package`,
+    };
+    const res = run(['--install', 'claude'], env);
+    expect(res.status).toBe(0);
+    expect(res.stdout).toContain('Added the MCP server "intercom"');
+    expect(claude.calls()).toEqual([
+      [
+        '-y',
+        'some-package',
+        'mcp',
+        'add',
+        '--scope',
+        'user',
+        'intercom',
+        '--',
+        'npx',
+        '-y',
+        '-p',
+        'tr-ai-intercom-helper',
+        'tr-ai-intercom-mcp',
+      ],
+    ]);
+
+    const missing = run(['--install', 'claude', '--claude-command', 'no-such-runner -y pkg'], env);
+    expect(missing.status).toBe(2);
+    expect(missing.stderr).toContain('The command "no-such-runner" was not found');
+    expect(missing.stderr).toContain(
+      '\n  no-such-runner -y pkg mcp add --scope user intercom -- npx',
+    );
   });
 
   it('accepts claude and codex only', () => {

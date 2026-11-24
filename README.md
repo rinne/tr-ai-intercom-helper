@@ -378,7 +378,10 @@ npx -y -p tr-ai-intercom-helper tr-ai-intercom-mcp --install codex --intercom ht
 ```
 
 - `--install claude` runs `claude mcp add --scope user intercom -- npx -y -p
-tr-ai-intercom-helper tr-ai-intercom-mcp …` for you.
+tr-ai-intercom-helper tr-ai-intercom-mcp …` for you. Where Claude Code is
+  not installed as the command `claude` but run through npx, say so with
+  `--claude-command "npx -y @anthropic-ai/claude-code"`. When the command is
+  not found, the exact commands are printed, to be run by hand.
 - `--install codex` adds a table `[mcp_servers.intercom]` to
   `~/.codex/config.toml` (or `$CODEX_HOME/config.toml`), leaving the rest of
   the file as it is.
@@ -500,16 +503,17 @@ Only `https` URLs are traded, and `http` for localhost.
 Every option can also be given in the environment, as `INTERCOM_MCP_OPT_`
 followed by its name in upper case with dashes as underscores.
 
-| Option          | Meaning                                                                                                                   |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `--intercom`    | An intercom that sessions may join, as its URL. Repeatable. Without it, any.                                              |
-| `--install`     | Register with a client and end: `claude` or `codex`                                                                       |
-| `--uninstall`   | Remove the registration from a client and end                                                                             |
-| `--server-name` | The name of the MCP server for `--install` and `--uninstall`. Default `intercom`.                                         |
-| `--list`        | Print which directory is which agent, and end                                                                             |
-| `--forget`      | Forget the identity of a directory, and end. The token is not revoked by this; `intercom_leave` in the session does both. |
-| `--state-dir`   | Where identities are kept. Default `$XDG_CONFIG_HOME/tr-ai-intercom` or `~/.config/tr-ai-intercom`.                       |
-| `--log-level`   | `debug`, `info`, `warn`, `error` or `silent`; the log goes to standard error. Default `info`.                             |
+| Option             | Meaning                                                                                                                      |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| `--intercom`       | An intercom that sessions may join, as its URL. Repeatable. Without it, any.                                                 |
+| `--install`        | Register with a client and end: `claude` or `codex`                                                                          |
+| `--uninstall`      | Remove the registration from a client and end                                                                                |
+| `--server-name`    | The name of the MCP server for `--install` and `--uninstall`. Default `intercom`.                                            |
+| `--claude-command` | How Claude Code is started, for `--install claude` and `--uninstall claude`: a command with its arguments. Default `claude`. |
+| `--list`           | Print which directory is which agent, and end                                                                                |
+| `--forget`         | Forget the identity of a directory, and end. The token is not revoked by this; `intercom_leave` in the session does both.    |
+| `--state-dir`      | Where identities are kept. Default `$XDG_CONFIG_HOME/tr-ai-intercom` or `~/.config/tr-ai-intercom`.                          |
+| `--log-level`      | `debug`, `info`, `warn`, `error` or `silent`; the log goes to standard error. Default `info`.                                |
 
 The identity files hold the agents' tokens and are readable by you only,
 like the client's own configuration, where a token would otherwise be. An

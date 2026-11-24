@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.2.1 (2026-11-24)
+
+- `tr-ai-intercom-mcp --install claude` works where Claude Code is not
+  installed as the command `claude`: **`--claude-command`** says how it is
+  started, for example `--claude-command "npx -y @anthropic-ai/claude-code"`.
+  It applies to `--uninstall claude` as well.
+- When the command is not found, the message prints the exact commands that
+  were to be run, with the server's name and the allowed intercoms, instead
+  of a pattern with `<name>` and without `--intercom`.
+
 ## 2.2.0 (2026-11-23)
 
 - `tr-ai-intercom-mcp` has the tool **`intercom_leave`**, the opposite of

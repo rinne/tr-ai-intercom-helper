@@ -29,10 +29,11 @@ async function main(): Promise<void> {
   const name = value<string>('server-name');
   const say = (line: string): void => void process.stdout.write(`${line}\n`);
 
+  const claudeCommand = value<string>('claude-command').split(/\s+/);
   const installing = value<McpClient | undefined>('install');
-  if (installing) return say(await install(installing, { name, intercoms }));
+  if (installing) return say(await install(installing, { name, intercoms, claudeCommand }));
   const uninstalling = value<McpClient | undefined>('uninstall');
-  if (uninstalling) return say(await uninstall(uninstalling, { name }));
+  if (uninstalling) return say(await uninstall(uninstalling, { name, claudeCommand }));
 
   if (value<boolean>('list')) {
     const all = store.list();

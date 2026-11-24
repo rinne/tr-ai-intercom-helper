@@ -60,6 +60,15 @@ export const MCP_OPTIONS: OptDef[] = [
     optArgCb: (s: string) => (/^[A-Za-z0-9_-]{1,64}$/.test(s) ? s : undefined),
   },
   {
+    longName: 'claude-command',
+    environment: 'INTERCOM_MCP_OPT_CLAUDE_COMMAND',
+    description:
+      'How Claude Code is started on this machine, for --install claude and --uninstall claude: a command with its arguments, separated by spaces. Where Claude Code is run through npx and not installed: "npx -y @anthropic-ai/claude-code".',
+    hasArg: true,
+    defaultValue: 'claude',
+    optArgCb: (s: string) => (s.trim() ? s.trim() : undefined),
+  },
+  {
     longName: 'list',
     environment: 'INTERCOM_MCP_OPT_LIST',
     description: 'Print which directories are which intercom agents, and end.',
