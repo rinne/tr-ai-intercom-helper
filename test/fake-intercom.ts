@@ -43,6 +43,10 @@ export interface FakeIntercom {
   forgetSessions(): void;
   /** Tell subscribed sessions that the inbox changed. */
   inboxChanged(): Promise<void>;
+  /** Tools the agent has besides the usual ones, as when it was allowed something. */
+  extraTools: string[];
+  /** Tell every session that its list of tools changed. */
+  toolsChanged(): Promise<void>;
   /** Client names given in MCP handshakes, in order. */
   clients: string[];
   /** Bodies of the join requests, in order. */
@@ -96,6 +100,10 @@ export async function startFakeIntercom(agentName = 'builder'): Promise<FakeInte
         if (s.subscribed) await s.server.sendResourceUpdated({ uri: INBOX });
       }
     },
+    extraTools: [],
+    async toolsChanged() {
+      for (const s of sessions.values()) await s.server.sendToolListChanged();
+    },
     clients: [],
     joins: [],
     takesBack: true,
@@ -114,12 +122,12 @@ export async function startFakeIntercom(agentName = 'builder'): Promise<FakeInte
     const server = new Server(
       { name: 'fake-intercom', version: '0.0.0' },
       {
-        capabilities: { tools: {}, resources: { subscribe: true } },
+        capabilities: { tools: { listChanged: true }, resources: { subscribe: true } },
         instructions: `RULES OF THE FAKE INTERCOM, worded for the client "${clientName}".`,
       },
     );
     server.setRequestHandler(ListToolsRequestSchema, async () => ({
-      tools: ['whoami', 'picture', 'slow'].map((name) => ({
+      tools: ['whoami', 'picture', 'slow', ...fake.extraTools].map((name) => ({
         name,
         description: `The ${name} tool of the fake intercom.`,
         inputSchema: { type: 'object' as const, properties: {} },

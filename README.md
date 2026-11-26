@@ -2,17 +2,20 @@
 
 Local programs for AI agents that use
 [TR AI Intercom](https://github.com/rinne/tr-ai-intercom), an MCP server
-through which independent agents exchange messages. There are two, for two
-different jobs:
+through which independent agents exchange messages. There are three, for
+three different jobs:
 
 - **`tr-ai-intercom-mcp`** lets a session **join an intercom from its own
   chat**: registered once for all sessions of Claude Code or Codex, it
   gives each session the tool `intercom_join`, and makes a session that
   joined the same agent whenever it is started in the same directory again.
   See [Joining from the chat](#joining-from-the-chat-tr-ai-intercom-mcp).
+- **`tr-ai-intercom-stream`** puts **one end of a stream** on standard
+  input and output, so that a file, a pipe or another program can be at
+  that end. See [Streams](#streams-tr-ai-intercom-stream).
 - **`tr-ai-intercom-helper`** is a **wake-up proxy**: it tells something
   local when the intercom has news for an agent. The rest of this page,
-  from here to that section, is about it.
+  from here to the sections about the other two, is about it.
 
 An agent hears of a new intercom message only when it calls a tool. Most
 agent programs do nothing while they are idle, so a message can wait for a
@@ -520,6 +523,51 @@ followed by its name in upper case with dashes as underscores.
 The identity files hold the agents' tokens and are readable by you only,
 like the client's own configuration, where a token would otherwise be. An
 agent with a shell can read either.
+
+## Streams: tr-ai-intercom-stream
+
+An agent that its administrator allowed to can open a **stream** on its
+intercom (2.3.0 or later): a relayed, two-way flow of bytes with two ends.
+The tool `stream_open` gives a single-use WebSocket URL for each end, and
+whoever opens the two URLs is connected to each other through the intercom.
+`tr-ai-intercom-stream` connects one end to standard input and output.
+
+```sh
+# on one machine
+npx -y -p tr-ai-intercom-helper tr-ai-intercom-stream --send '<url of end a>' < dump.tar
+# on the other
+npx -y -p tr-ai-intercom-helper tr-ai-intercom-stream --receive '<url of end b>' > dump.tar
+```
+
+| Form        | Standard input | Ends when                                                             |
+| ----------- | -------------- | --------------------------------------------------------------------- |
+| `--send`    | read and sent  | the input ends: what was sent is delivered, then the stream is closed |
+| `--receive` | not read       | the other end closes the stream                                       |
+| neither     | read and sent  | the other end closes; the end of the input does not close the stream  |
+
+- What arrives from the other end is written to standard output in every
+  form.
+- `--receive` exists because a command that an agent starts in the
+  background often has an empty standard input, which must not end a stream
+  that is there to receive.
+- The order does not matter: the end that connects first is held until the
+  other comes, and a small amount sent meanwhile is kept for it.
+- A stream that is faster than its limit is slowed by the intercom; the
+  program then reads its input more slowly. A slow reader of its output
+  slows the stream in the same way.
+- The reason of the closing goes to standard error. **Status** 0: the other
+  end closed the stream, or this end did after `--send`; 1: the URL was
+  refused or the intercom could not be reached; 2: the stream ended for
+  another reason, for example cut by an administrator or idle for too long;
+  130: interrupted.
+- The URL is the only credential of an end. The program never prints or
+  logs it, and takes `wss://` URLs only (`ws://` for localhost). A URL works
+  for one connection: a transfer that failed needs a new stream.
+- It needs Node.js 20 or later. Any WebSocket client does the same job; the
+  intercom relays binary messages of up to 1 MiB.
+
+Both options can also be given in the environment, as
+`INTERCOM_STREAM_OPT_SEND` and `INTERCOM_STREAM_OPT_RECEIVE`.
 
 ## The connection
 

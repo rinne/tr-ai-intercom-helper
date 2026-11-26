@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.3.0 (2026-11-26)
+
+- A third program, **`tr-ai-intercom-stream`**: one end of a stream of an
+  intercom on standard input and output. Streams come with intercom 2.3.0:
+  an agent that is allowed to opens one with `stream_open` and gets a
+  single-use WebSocket URL for each of its two ends.
+  - `--send` sends standard input and closes the stream when it ends;
+    `--receive` does not read standard input at all and writes what arrives
+    until the other end closes; without either, both directions are
+    connected and the end of the input does not close the stream.
+  - The reason of the closing goes to standard error, and the status says
+    how it ended: 0 for a normal end, 1 for a refused URL or an intercom
+    that could not be reached, 2 for anything else, 130 when interrupted.
+  - It never prints or logs the URL, and takes `wss://` URLs only (`ws://`
+    for localhost).
+- `tr-ai-intercom-mcp` tells the session when the intercom changed the
+  agent's tools, as it does when an administrator allows the agent to open
+  streams or no longer does.
+- `scripts/live-check.mjs` checks the bridge against a running intercom
+  that has streams and allows them in the exchange it works in.
+
 ## 2.2.2 (2026-11-24)
 
 - `tr-ai-intercom-mcp` takes **`--codex-command`** and **`--grok-command`**

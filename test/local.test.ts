@@ -284,6 +284,16 @@ describe('a session that starts as an agent', () => {
     expect(s.updated).toEqual([INBOX]);
   });
 
+  it("tells the session when the intercom changed the agent's tools", async () => {
+    const s = await session();
+    expect(await s.tools()).toEqual(TOOLS);
+    const before = s.changed();
+    fake.extraTools = ['stream_open'];
+    await fake.toolsChanged();
+    await until(() => s.changed() > before, 5000);
+    expect(await s.tools()).toContain('stream_open');
+  });
+
   it('carries on when the intercom has forgotten the session, without repeating a call', async () => {
     const s = await session();
     await s.call('whoami');

@@ -17,11 +17,16 @@
 // tools, and is the same agent when it starts again; and, on an intercom
 // that takes a token back (2.2 and later), that it can leave again.
 //
+// On an intercom with streams (2.3 and later), where the owner of the
+// exchange is allowed any, it checks tr-ai-intercom-stream: an agent opens
+// a stream, and a file goes from one command to another through it.
+//
 //   npm run build
 //   node scripts/live-check.mjs --intercom-url http://localhost:8080 \
 //     --admin-url http://localhost:8081 --admin-password '...'
 
 import { spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import http from 'node:http';
 import net from 'node:net';
@@ -97,6 +102,7 @@ const WAIT_MS = opt.value('wait') * 1000;
 const CLI = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
 const NOTIFY = fileURLToPath(new URL('../dist/notify-cli.js', import.meta.url));
 const LOCAL = fileURLToPath(new URL('../dist/mcp-cli.js', import.meta.url));
+const STREAM = fileURLToPath(new URL('../dist/stream-cli.js', import.meta.url));
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const results = [];
@@ -484,6 +490,65 @@ async function checkJoining(joiner, viewOf) {
   }
 }
 
+// ---- streams, with tr-ai-intercom-stream --------------------------------------
+
+/** Run the bridge on one end; resolves with its status and what it wrote. */
+function bridge(args, input) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [STREAM, ...args], {
+      stdio: [input ? 'pipe' : 'ignore', 'pipe', 'pipe'],
+    });
+    const out = [];
+    let err = '';
+    child.stdout.on('data', (chunk) => out.push(chunk));
+    child.stderr.on('data', (chunk) => (err += chunk.toString()));
+    if (input) child.stdin.end(input);
+    child.on('close', (status) => resolve({ status, out: Buffer.concat(out), err }));
+  });
+}
+
+async function checkStreams(x, streamer) {
+  await admin('PATCH', `${x}/agents/${streamer.agent.id}`, { streams: { enabled: true } });
+  const agent = agentAt(INTERCOM, streamer.token);
+  await agent.open();
+  const made = await agent.tool('stream_open', { label: 'helper live check' });
+  check(
+    'stream: an agent that is allowed to opens one and gets a URL for each end',
+    /\/mcp\/stream\//.test(made.ends?.a ?? '') && made.ends.a !== made.ends.b,
+  );
+  const sent = randomBytes(200_000);
+  // The receiver has no standard input, like a command run in the background.
+  const receiving = bridge(['--receive', made.ends.b]);
+  await sleep(500);
+  const shown = (await admin('GET', `${x}/streams`)).streams.find((s) => s.id === made.stream);
+  check(
+    'stream: the console shows it with one end connected',
+    shown?.state === 'half',
+    shown?.state,
+  );
+  const sender = await bridge(['--send', made.ends.a], sent);
+  const receiver = await receiving;
+  check('stream: the sender ends with status 0', sender.status === 0, sender.err.trim());
+  check('stream: the receiver ends with status 0', receiver.status === 0, receiver.err.trim());
+  check(
+    'stream: what was sent arrived unchanged',
+    receiver.out.equals(sent),
+    `${receiver.out.length} of ${sent.length} bytes`,
+  );
+  check(
+    'stream: the bridge never prints the URL',
+    !`${sender.err}${receiver.err}`.includes('/mcp/stream/'),
+  );
+  const again = await bridge(['--receive', made.ends.a]);
+  check(
+    'stream: a URL of a stream that has ended is refused with status 1',
+    again.status === 1,
+    again.err.trim(),
+  );
+  const left = await agent.tool('stream_list');
+  check('stream: the agent has no stream left', left.streams.length === 0);
+}
+
 // ---- the run ----------------------------------------------------------------
 
 const tag = Math.random().toString(36).slice(2, 8);
@@ -705,6 +770,20 @@ try {
     );
   } else {
     console.log('\n  ...  this intercom gives no join URLs (before 2.1): joining is not checked');
+  }
+
+  // Streams, where the intercom has them and the owner of the exchange is allowed any.
+  const ceiling = (await admin('GET', `${x}/overview`)).stream_ceiling;
+  if (!ceiling) {
+    console.log('\n  ...  this intercom has no streams (before 2.3): the bridge is not checked');
+  } else if (ceiling.max_open === 0) {
+    console.log(
+      '\n  ...  streams are not allowed in this exchange (the quota of its owner): the bridge is not checked',
+    );
+  } else {
+    const streamer = await admin('POST', `${x}/agents`, { name: `check-streamer-${tag}` });
+    created.agents.push(streamer.agent.id);
+    await checkStreams(x, streamer);
   }
 } catch (err) {
   failed = err;

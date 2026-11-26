@@ -1,14 +1,15 @@
 {
   "name": "tr-ai-intercom-helper",
-  "version": "2.2.2",
-  "description": "Local companion for agents that use TR AI Intercom: a local MCP server through which a session joins an intercom from its own chat, and a proxy that turns the intercom's wake-up notifications into local events.",
+  "version": "2.3.0",
+  "description": "Local companion for agents that use TR AI Intercom: a local MCP server through which a session joins an intercom from its own chat, a proxy that turns the intercom's wake-up notifications into local events, and a program that puts one end of a stream on standard input and output.",
   "license": "MIT",
   "author": "Timo J. Rinne <tri@iki.fi>",
   "type": "module",
   "bin": {
     "tr-ai-intercom-helper": "dist/cli.js",
     "tr-ai-intercom-notify": "dist/notify-cli.js",
-    "tr-ai-intercom-mcp": "dist/mcp-cli.js"
+    "tr-ai-intercom-mcp": "dist/mcp-cli.js",
+    "tr-ai-intercom-stream": "dist/stream-cli.js"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

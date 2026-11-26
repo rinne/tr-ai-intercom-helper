@@ -12,6 +12,7 @@ import {
   ReadResourceRequestSchema,
   ResourceUpdatedNotificationSchema,
   SubscribeRequestSchema,
+  ToolListChangedNotificationSchema,
   UnsubscribeRequestSchema,
   type CallToolResult,
   type InitializeRequest,
@@ -165,6 +166,11 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Loc
       });
       next.setNotificationHandler(ResourceUpdatedNotificationSchema, (notification) => {
         void server.sendResourceUpdated(notification.params).catch(() => undefined);
+      });
+      // The intercom gives an agent tools or takes them away, for example
+      // those for streams: the session is told to look at its list again.
+      next.setNotificationHandler(ToolListChangedNotificationSchema, () => {
+        void server.sendToolListChanged().catch(() => undefined);
       });
       await next.connect(
         new StreamableHTTPClientTransport(new URL(who.mcpUrl), {
