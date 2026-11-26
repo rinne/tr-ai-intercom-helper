@@ -1,5 +1,42 @@
 # Changelog
 
+## 2.5.0 (2026-11-27)
+
+- A fifth program, **`tr-ai-intercom-serve`**: the serving side of a
+  **stream service**. Stream services come with intercom 2.4.0: an agent
+  that is allowed to registers one and gets a control URL for the program
+  that serves and a URL for clients, both valid for as long as the
+  registration.
+  - It holds the control socket and connects every client that the
+    intercom announces to the server named with `--connect`: a port, an
+    address and a port, or the path of a local domain socket. It connects
+    to the server first and refuses the client, with the reason, when that
+    fails.
+  - It runs until it is stopped and opens the control socket again when it
+    is lost. One line per connection goes to standard error, with the
+    address the client came from; `--quiet` leaves out the ones that went
+    as they should.
+- `tr-ai-intercom-stream` is also the **clients' side of a stream
+  service**, told by the URL: with `--listen` the port stays open and every
+  program that connects gets a connection of its own; without it is one
+  connection on standard input and output, which makes it an `ssh`
+  `ProxyCommand`. It ends on SIGHUP as on SIGINT and SIGTERM.
+- **`--url-file`** in both programs: a file that holds the URL and nothing
+  else, readable by its owner alone. The URLs of a stream service live
+  long, and a URL given as a parameter shows in the list of processes.
+- `--connect` of `tr-ai-intercom-stream` also takes the path of a local
+  domain socket.
+- **Changed:** nothing but the payload is sent on a stream. An end no
+  longer sends an empty message to say that it is there, and an end on
+  `--connect` connects to its port as soon as its end of the stream is
+  open, instead of at the first message of the other end. An end on 2.4.0
+  with `--connect` should not be paired with a newer one: it would wait for
+  a message that a server which speaks second never causes. For a server
+  that should be connected to only when its client is there, use a stream
+  service.
+- `scripts/live-check.mjs` checks both programs against a running intercom
+  that has stream services and allows them in the exchange it works in.
+
 ## 2.4.0 (2026-11-26)
 
 - `tr-ai-intercom-stream` can put a **TCP port** on an end of a stream

@@ -2,8 +2,8 @@
 
 Local programs for AI agents that use
 [TR AI Intercom](https://github.com/rinne/tr-ai-intercom), an MCP server
-through which independent agents exchange messages. There are three, for
-three different jobs:
+through which independent agents exchange messages. There are four, for
+four different jobs:
 
 - **`tr-ai-intercom-mcp`** lets a session **join an intercom from its own
   chat**: registered once for all sessions of Claude Code or Codex, it
@@ -12,10 +12,14 @@ three different jobs:
   See [Joining from the chat](#joining-from-the-chat-tr-ai-intercom-mcp).
 - **`tr-ai-intercom-stream`** puts **one end of a stream** on standard
   input and output, so that a file, a pipe or another program can be at
-  that end. See [Streams](#streams-tr-ai-intercom-stream).
+  that end, or on a TCP port. It is also the **clients' side of a stream
+  service**. See [Streams](#streams-tr-ai-intercom-stream).
+- **`tr-ai-intercom-serve`** is the **serving side of a stream service**:
+  it connects every client that the intercom announces to a server on this
+  machine. See [Stream services](#stream-services-tr-ai-intercom-serve).
 - **`tr-ai-intercom-helper`** is a **wake-up proxy**: it tells something
   local when the intercom has news for an agent. The rest of this page,
-  from here to the sections about the other two, is about it.
+  from here to the sections about the other three, is about it.
 
 An agent hears of a new intercom message only when it calls a tool. Most
 agent programs do nothing while they are idle, so a message can wait for a
@@ -585,7 +589,7 @@ ssh -p 2222 localhost
 | Option                         | What it does                                                                                            |
 | ------------------------------ | ------------------------------------------------------------------------------------------------------- |
 | `--listen [<address>:]<port>`  | Opens the port and puts the first program that connects to it on the stream. Nobody is let in after it. |
-| `--connect [<address>:]<port>` | Connects to the port when the other end says that it is there, and puts that connection on the stream.  |
+| `--connect [<address>:]<port>` | Connects to the port as soon as its end of the stream is open, and puts that connection on the stream.  |
 
 - Without an address the port is on `127.0.0.1`. An IPv6 address is written
   in brackets, `[::1]:2222`. `--listen 0` lets the system choose a port.
@@ -598,13 +602,15 @@ ssh -p 2222 localhost
   is ended after it got everything. A stream has no half-close: a program
   that ends its sending side and then waits for an answer does not get it.
   For a second connection, open a second stream.
-- An end on `--connect` leaves its server alone until the other end is
-  there, so that the server is not kept waiting and gives up before its
-  client came. Every end of this program says that it is there by sending
-  an empty message: at once on standard input and output, and when a program
-  connected on `--listen`. Another WebSocket client can do the same; the
-  first message of any length does it. Two ends on `--connect` wait for each
-  other in vain.
+- An end on `--connect` connects to its server as soon as its end of the
+  stream is open, and can also be given the path of a local domain socket.
+  A server that gives up on a client that says nothing may do so before the
+  other end has come: start the two ends close together, or use a
+  [stream service](#stream-services-tr-ai-intercom-serve), where the server
+  is connected to only when a client is there. (In 2.4.0 the end waited for
+  the first message of the other end, and every end sent an empty message
+  to say that it was there. Nothing but the payload is sent now, so an end
+  on 2.4.0 with `--connect` should not be paired with a newer one.)
 - What arrives before the program on a `--listen` port has connected is
   kept for it, also when the other end has sent everything and left.
 - The two kinds of end mix: a file sent with `--send` goes into a port on
@@ -620,8 +626,112 @@ ssh -p 2222 localhost
   other party is meant to use.
 
 All options can also be given in the environment: `INTERCOM_STREAM_OPT_SEND`,
-`INTERCOM_STREAM_OPT_RECEIVE`, `INTERCOM_STREAM_OPT_LISTEN` and
-`INTERCOM_STREAM_OPT_CONNECT`.
+`INTERCOM_STREAM_OPT_RECEIVE`, `INTERCOM_STREAM_OPT_LISTEN`,
+`INTERCOM_STREAM_OPT_CONNECT` and `INTERCOM_STREAM_OPT_URL_FILE`.
+
+## Stream services: tr-ai-intercom-serve
+
+A stream connects two parties once. A **stream service** (intercom 2.4.0
+or later) is a standing door to a server program: an agent that its
+administrator allowed to registers one with `stream_service_register` and
+gets two URLs that stay valid for as long as the registration. Any number
+of clients can then connect, one after or beside another, and each gets a
+connection of its own to the server.
+
+```sh
+# where the server is, for as long as the service is to work
+npx -y -p tr-ai-intercom-helper tr-ai-intercom-serve --connect 5432 --url-file control.url
+
+# where the clients are: a port that stays open for them
+npx -y -p tr-ai-intercom-helper tr-ai-intercom-stream --listen 15432 --url-file endpoint.url
+psql -h 127.0.0.1 -p 15432
+```
+
+### The serving side
+
+```
+tr-ai-intercom-serve --connect <port | address:port | /path/to/socket> (--url-file <file> | <url>)
+```
+
+- It holds the **control socket** of the service (the control URL,
+  `wss://…/mcp/control/…`), on which the intercom announces every client
+  that connects.
+- For each client it **connects to the server first**. When that worked it
+  takes the client, and the two are joined; when it did not, it refuses the
+  client with the reason. So a client that is connected has the server
+  behind it, and a server is never kept waiting for a client.
+- `--connect` names the server: a port on `127.0.0.1`, an address and a
+  port (also of another machine it can reach), or the path of a local
+  domain socket, which is anything with a `/` in it.
+- It **runs until it is stopped**, and is meant to: under a service manager
+  or in the background of a session. When the control socket is lost it is
+  opened again after 5 seconds and then every 60; connections that run are
+  not touched by that. After another serving side took the service over it
+  waits 10 minutes: run one serving program per stream service.
+- One line per connection goes to standard error, with the address the
+  intercom saw the client come from, and never a URL:
+
+  ```
+  tr-ai-intercom-serve: serving sv_k3V9xQ2a: every client of the stream service is connected to 127.0.0.1:5432
+  tr-ai-intercom-serve: cn_8fQ2mL0x from 203.0.113.7: connected to 127.0.0.1:5432
+  tr-ai-intercom-serve: cn_8fQ2mL0x from 203.0.113.7: ended after 12.4 s, 3.4 MB to the client, 120 KB from it (the client closed)
+  tr-ai-intercom-serve: cn_9aa0Kq1Z from 203.0.113.7: refused, nothing listens there (127.0.0.1:5432)
+  ```
+
+  `--quiet` leaves out the lines about connections that came and went as
+  they should. The server itself is not told where a client came from.
+
+- **Status** 1: the control URL is not known to the intercom, was renewed,
+  or its service was removed; 130: interrupted. While the service is only
+  closed for now (its agent disabled, its exchange suspended) the program
+  keeps trying.
+
+### The clients' side
+
+`tr-ai-intercom-stream` tells the URL of a stream service
+(`wss://…/mcp/service/…`) from that of a stream, and behaves accordingly:
+
+| Given the URL of a stream service | What it does                                                                                      |
+| --------------------------------- | ------------------------------------------------------------------------------------------------- |
+| with `--listen`                   | The port stays open, and every program that connects gets a connection of its own to the service. |
+| without                           | One connection on standard input and output. `--send` and `--receive` work as for a stream.       |
+| with `--connect`                  | Refused: a client does not connect the service to a port.                                         |
+
+- Without options it is a **proxy command**. Each `ssh` is then one
+  connection, with `tr-ai-intercom-serve --connect 22` on the serving side:
+
+  ```sh
+  ssh -o 'ProxyCommand=npx -y -p tr-ai-intercom-helper tr-ai-intercom-stream wss://intercom.example.com/mcp/service/…' user@host
+  ```
+
+  The host name given to `ssh` then only selects the host key and the
+  configuration. `ssh` ends its proxy command with SIGHUP, which the
+  program takes as the end of the connection.
+
+- A program whose connection the service does not take is disconnected,
+  and a line on standard error says why: nobody serves (503), the serving
+  side refused (502) or did not answer (504), the service is full (429) or
+  closed for now (403), or the URL is no longer valid (404). With `--listen`
+  the port stays open; without, the program ends with status 1.
+- The URL of a stream service is not used up: the same command works again.
+
+### The URLs
+
+- **They are long-lived credentials.** A URL given as a parameter shows in
+  the list of processes, so for anything that runs for long, name a file
+  with `--url-file`: it holds the URL and nothing else, and the programs
+  refuse it unless it is readable by its owner alone (`chmod 600`).
+- The **control URL** belongs to the serving program and nobody else.
+  Whoever has it can serve the service, and so receive its clients.
+- The **URL for clients** belongs to whoever is meant to connect. Whoever
+  has it reaches the server behind the service.
+- Neither is ever printed or logged by these programs. The agent that
+  registered the service is shown them once; a URL that is lost or exposed
+  is replaced with `stream_service_renew_url`.
+
+The options of `tr-ai-intercom-serve` can also be given in the environment:
+`INTERCOM_SERVE_OPT_CONNECT`, `INTERCOM_SERVE_OPT_URL_FILE` and
+`INTERCOM_SERVE_OPT_QUIET`.
 
 ## The connection
 

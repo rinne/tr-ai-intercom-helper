@@ -22,13 +22,18 @@
 // a stream, and a file goes from one command to another through it; and
 // with a port on each end, a program talks to a server through another.
 //
+// On an intercom with stream services (2.4 and later), where the owner of
+// the exchange is allowed any, it checks tr-ai-intercom-serve and the
+// clients' side of tr-ai-intercom-stream: an agent registers a service,
+// one program serves it, and programs reach a server through another.
+//
 //   npm run build
 //   node scripts/live-check.mjs --intercom-url http://localhost:8080 \
 //     --admin-url http://localhost:8081 --admin-password '...'
 
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
@@ -104,6 +109,7 @@ const CLI = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
 const NOTIFY = fileURLToPath(new URL('../dist/notify-cli.js', import.meta.url));
 const LOCAL = fileURLToPath(new URL('../dist/mcp-cli.js', import.meta.url));
 const STREAM = fileURLToPath(new URL('../dist/stream-cli.js', import.meta.url));
+const SERVE = fileURLToPath(new URL('../dist/serve-cli.js', import.meta.url));
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const results = [];
@@ -601,6 +607,178 @@ async function checkStreams(x, streamer) {
   check('stream: the agent has no stream left', left.streams.length === 0);
 }
 
+// ---- stream services, with tr-ai-intercom-serve and tr-ai-intercom-stream ------
+
+/** Start a program that keeps running; gives what it writes and how it ends. */
+function program(file, args, stdin = 'ignore') {
+  const child = spawn(process.execPath, [file, ...args], { stdio: [stdin, 'pipe', 'pipe'] });
+  const state = { err: '', out: Buffer.alloc(0) };
+  child.stderr.on('data', (chunk) => (state.err += chunk.toString()));
+  child.stdout.on('data', (chunk) => (state.out = Buffer.concat([state.out, chunk])));
+  const exited = new Promise((resolve) => child.on('close', resolve));
+  return { child, state, exited };
+}
+
+async function checkStreamServices(x, owner) {
+  await admin('PATCH', `${x}/agents/${owner.agent.id}`, { stream_services: { enabled: true } });
+  const agent = agentAt(INTERCOM, owner.token);
+  await agent.open();
+  const made = await agent.tool('stream_service_register', { name: 'live-check' });
+  check(
+    'service: an agent that is allowed to registers one and gets its two URLs',
+    /\/mcp\/control\//.test(made.control_url ?? '') &&
+      /\/mcp\/service\//.test(made.endpoint_url ?? ''),
+    made.error ?? '',
+  );
+  if (!made.control_url) return;
+  const controlFile = path.join(dir, 'control.url');
+  const endpointFile = path.join(dir, 'endpoint.url');
+  await writeFile(controlFile, `${made.control_url}\n`, { mode: 0o600 });
+  await writeFile(endpointFile, `${made.endpoint_url}\n`, { mode: 0o600 });
+  const shownAs = async () =>
+    (await admin('GET', `${x}/stream-services`)).stream_services.find((s) => s.id === made.service);
+
+  const echo = net.createServer((s) => {
+    s.on('error', () => undefined);
+    s.write('ready\n');
+    s.pipe(s);
+  });
+  await new Promise((resolve) => echo.listen(0, '127.0.0.1', resolve));
+  const serving = program(SERVE, [
+    '--connect',
+    String(echo.address().port),
+    '--url-file',
+    controlFile,
+  ]);
+  await until(
+    'the serving program to say hello',
+    () => /serving sv_/.test(serving.state.err),
+    15_000,
+  ).catch(() => undefined);
+  check(
+    'service: tr-ai-intercom-serve holds the control socket',
+    /serving sv_/.test(serving.state.err),
+    serving.state.err.trim(),
+  );
+  check(
+    'service: the console shows it with a serving side',
+    (await shownAs())?.state === 'serving',
+    (await shownAs())?.state,
+  );
+
+  const listening = program(STREAM, ['--listen', '0', '--url-file', endpointFile]);
+  const at = () => /listening on 127\.0\.0\.1:(\d+)/.exec(listening.state.err)?.[1];
+  await until("the clients' program to listen", () => at(), 15_000).catch(() => undefined);
+  check('service: tr-ai-intercom-stream keeps a port open for its clients', Boolean(at()));
+  const clients = [];
+  for (let i = 0; i < 3; i++) {
+    const got = [];
+    const socket = net.connect({ host: '127.0.0.1', port: Number(at()) });
+    socket.on('error', () => undefined);
+    socket.on('data', (chunk) => got.push(chunk));
+    const words = randomBytes(50_000);
+    socket.write(words);
+    clients.push({ socket, words, text: () => Buffer.concat(got) });
+  }
+  await until(
+    'three programs to be answered through the service',
+    () => clients.every((c) => c.text().length >= 6 + c.words.length),
+    30_000,
+  ).catch(() => undefined);
+  check(
+    'service: three programs at once each reach the server on a connection of their own',
+    clients.every(
+      (c) =>
+        c.text().subarray(0, 6).toString() === 'ready\n' && c.text().subarray(6).equals(c.words),
+    ),
+    clients.map((c) => `${c.text().length} of ${6 + c.words.length} bytes`).join(', '),
+  );
+  const three = await shownAs();
+  check(
+    'service: the console shows the three connections',
+    three?.connections.length === 3,
+    String(three?.connections.length),
+  );
+  for (const c of clients) c.socket.end();
+
+  // As a proxy command: one connection on standard input and output.
+  const proxy = program(STREAM, [made.endpoint_url], 'pipe');
+  await until('the server to greet the proxy command', () => proxy.state.out.length >= 6, 15_000)
+    .then(() => proxy.child.stdin.write('through the proxy'))
+    .then(() =>
+      until('the proxy command to be answered', () => proxy.state.out.length >= 23, 15_000),
+    )
+    .catch(() => undefined);
+  proxy.child.kill('SIGHUP');
+  const proxyStatus = await proxy.exited;
+  check(
+    'service: one connection on standard input and output, ended by SIGHUP as ssh does',
+    proxy.state.out.toString() === 'ready\nthrough the proxy' && proxyStatus === 130,
+    `${JSON.stringify(proxy.state.out.toString())}, status ${proxyStatus}`,
+  );
+  await until(
+    'the serving program to note four connections',
+    () => (serving.state.err.match(/ended after/g) ?? []).length >= 4,
+    15_000,
+  ).catch(() => undefined);
+  check(
+    'service: the serving program wrote a line for each connection, with where the client came from',
+    (serving.state.err.match(/cn_\w+ from [^:]+: connected to /g) ?? []).length === 4,
+    serving.state.err.trim().split('\n').slice(-3).join(' | '),
+  );
+
+  // Without a serving side a client is told so at once.
+  serving.child.kill('SIGINT');
+  const servingStatus = await serving.exited;
+  check(
+    'service: the serving program ends with status 130 when interrupted',
+    servingStatus === 130,
+  );
+  await until(
+    'the service to be unattended',
+    async () => (await shownAs())?.state === 'unattended',
+    10_000,
+  ).catch(() => undefined);
+  const alone = net.connect({ host: '127.0.0.1', port: Number(at()) });
+  alone.on('error', () => undefined);
+  await new Promise((resolve) => alone.on('close', resolve));
+  await until('the refusal to be said', () => /\(503\)/.test(listening.state.err), 10_000).catch(
+    () => undefined,
+  );
+  check(
+    'service: without a serving side a client is turned away at once with 503',
+    /refused the URL \(503\)/.test(listening.state.err),
+    listening.state.err.trim().split('\n').at(-1),
+  );
+  const listed = (await agent.tool('stream_service_list')).stream_services?.[0];
+  check(
+    'service: the agent sees what its service did, and not its URLs',
+    listed?.connections_total === 4 &&
+      listed?.turned_away_last_hour?.no_server_503 >= 1 &&
+      !JSON.stringify(listed).includes('/mcp/'),
+    JSON.stringify({
+      total: listed?.connections_total,
+      turned_away: listed?.turned_away_last_hour,
+    }),
+  );
+  check(
+    'service: neither program ever printed a URL',
+    !`${serving.state.err}${listening.state.err}${proxy.state.err}`.includes('/mcp/'),
+  );
+  listening.child.kill('SIGTERM');
+  await listening.exited;
+  echo.close();
+
+  const gone = await agent.tool('stream_service_unregister', { service: 'live-check' });
+  check('service: the agent removes its registration', gone.removed === made.service);
+  const after = program(SERVE, ['--connect', '1', '--url-file', controlFile]);
+  check(
+    'service: its control URL is of no use afterwards (status 1)',
+    (await after.exited) === 1,
+    after.state.err.trim(),
+  );
+}
+
 // ---- the run ----------------------------------------------------------------
 
 const tag = Math.random().toString(36).slice(2, 8);
@@ -836,6 +1014,22 @@ try {
     const streamer = await admin('POST', `${x}/agents`, { name: `check-streamer-${tag}` });
     created.agents.push(streamer.agent.id);
     await checkStreams(x, streamer);
+  }
+
+  // Stream services, likewise.
+  const serviceCeiling = (await admin('GET', `${x}/overview`)).stream_service_ceiling;
+  if (!serviceCeiling) {
+    console.log(
+      '\n  ...  this intercom has no stream services (before 2.4): the serving program is not checked',
+    );
+  } else if (serviceCeiling.max_registered === 0) {
+    console.log(
+      '\n  ...  stream services are not allowed in this exchange (the quota of its owner): the serving program is not checked',
+    );
+  } else {
+    const owner = await admin('POST', `${x}/agents`, { name: `check-server-${tag}` });
+    created.agents.push(owner.agent.id);
+    await checkStreamServices(x, owner);
   }
 } catch (err) {
   failed = err;

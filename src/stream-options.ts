@@ -27,7 +27,7 @@ export const STREAM_OPTIONS: OptDef[] = [
     environment: 'INTERCOM_STREAM_OPT_LISTEN',
     hasArg: true,
     description:
-      'Put a TCP port of this machine on the stream instead of standard input and output: listen on <port> or <address>:<port> (127.0.0.1 without an address; port 0 lets the system choose and says which), and connect the first program that connects there to the stream. For a client such as ssh or rsync: tr-ai-intercom-stream --listen 2222 <url>',
+      'Put a TCP port of this machine on the stream instead of standard input and output: listen on <port> or <address>:<port> (127.0.0.1 without an address; port 0 lets the system choose and says which). With the URL of a stream: the first program that connects there is on the stream, and nobody after it. With the URL of a stream service: every program that connects gets a connection of its own, until the program is stopped.',
     conflictsWith: ['connect', 'send', 'receive'],
   },
   {
@@ -35,7 +35,14 @@ export const STREAM_OPTIONS: OptDef[] = [
     environment: 'INTERCOM_STREAM_OPT_CONNECT',
     hasArg: true,
     description:
-      'Put a TCP port on the stream instead of standard input and output: connect to <port> or <address>:<port> (127.0.0.1 without an address) once the other end is there, and connect that to the stream. For a server such as sshd: tr-ai-intercom-stream --connect 22 <url>',
+      'Put a TCP port on the stream instead of standard input and output: connect to <port> or <address>:<port> (127.0.0.1 without an address), or to the local domain socket at a path, and connect that to the stream. Not for the URL of a stream service: its serving side is tr-ai-intercom-serve.',
     conflictsWith: ['listen', 'send', 'receive'],
+  },
+  {
+    longName: 'url-file',
+    environment: 'INTERCOM_STREAM_OPT_URL_FILE',
+    hasArg: true,
+    description:
+      'A file that holds the URL and nothing else, instead of the <url> parameter. The file must be readable by its owner alone (chmod 600). For the URL of a stream service, which lives long: a parameter shows in the list of processes.',
   },
 ];

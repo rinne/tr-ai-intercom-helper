@@ -43,7 +43,10 @@ interface Relay {
 
 async function startRelay(): Promise<Relay> {
   const wss = new WebSocketServer({ noServer: true });
-  const ends = new Map<string, { peer: string; ws?: WebSocket; held: Buffer[]; used: boolean }>();
+  const ends = new Map<
+    string,
+    { peer: string; ws?: WebSocket; held: Buffer[]; used: boolean; gone: boolean; dead: boolean }
+  >();
   const sizes: number[] = [];
   const server = http.createServer((_req, res) => {
     res
@@ -59,13 +62,15 @@ async function startRelay(): Promise<Relay> {
       );
       socket.destroy();
     };
-    if (!end) return refuse('404 Not Found', 'There is no such stream URL.\n');
+    if (!end || end.dead) return refuse('404 Not Found', 'There is no such stream URL.\n');
     if (end.used) return refuse('410 Gone', 'This stream URL was used already.\n');
     end.used = true;
     wss.handleUpgrade(req, socket, head, (ws) => {
       end.ws = ws;
       const peer = ends.get(end.peer)!;
       for (const m of peer.held.splice(0)) ws.send(m, { binary: true });
+      // The other end sent what it had and left: that is all there is.
+      if (peer.gone) return ws.close(1000, 'peer-closed');
       ws.on('message', (data) => {
         const bytes = data as Buffer;
         sizes.push(bytes.length);
@@ -74,7 +79,10 @@ async function startRelay(): Promise<Relay> {
       });
       ws.on('close', () => {
         end.ws = undefined;
-        peer.ws?.close(1000, 'peer-closed');
+        end.gone = true;
+        if (peer.ws) peer.ws.close(1000, 'peer-closed');
+        // Nothing waits for the other end: the stream is over, and its URL with it.
+        else if (end.held.length === 0) peer.dead = true;
       });
     });
   });
@@ -85,8 +93,8 @@ async function startRelay(): Promise<Relay> {
     stream() {
       const a = randomBytes(24).toString('base64url');
       const b = randomBytes(24).toString('base64url');
-      ends.set(a, { peer: b, held: [], used: false });
-      ends.set(b, { peer: a, held: [], used: false });
+      ends.set(a, { peer: b, held: [], used: false, gone: false, dead: false });
+      ends.set(b, { peer: a, held: [], used: false, gone: false, dead: false });
       return { a: `${url}/mcp/stream/${a}`, b: `${url}/mcp/stream/${b}` };
     },
     cut(code, reason) {
@@ -343,16 +351,15 @@ describe('an end on a port', () => {
     }
   });
 
-  it('puts a client and a server on a stream, and connects to the server when the client came', async () => {
+  it('puts a client and a server on a stream', async () => {
     const greeting = 'hello from the server\n';
     const server = await tcpServer({ greeting, echo: true });
     const { a, b } = relay.stream();
     const far = portBridge(a, { connect: here(server.port) });
     const near = portBridge(b, { listen: here(0) });
     const port = await near.listening;
-    await wait(150);
-    // Both ends are on the stream, and the server is left alone: no program has come.
-    expect(server.connections).toBe(0);
+    // An end on --connect connects to its server as soon as its end of the stream is open.
+    await until(() => server.connections === 1);
     const client = await tcpClient(port);
     // The server speaks first; the client has sent nothing.
     await until(() => client.received().toString() === greeting);
@@ -414,9 +421,8 @@ describe('an end on a port', () => {
     const server = await tcpServer({ greeting: 'the whole log\n', hangUp: true });
     const { a, b } = relay.stream();
     const far = portBridge(a, { connect: here(server.port) });
-    await wait(100);
-    expect(server.connections).toBe(0);
-    // An end on standard output says that it is there as soon as it is.
+    await until(() => server.closed === 1);
+    // What the server said is kept for the end that comes afterwards.
     const receiver = bridge(b, 'receive');
     expect(await receiver.status).toBe(0);
     expect(receiver.received().toString()).toBe('the whole log\n');
@@ -459,8 +465,9 @@ describe('an end on a port', () => {
     for (const close of opened.splice(0)) close();
     await wait(50);
     const { a, b } = relay.stream();
-    const far = portBridge(a, { connect: here(gone.port) });
     const other = bridge(b, 'both');
+    await wait(100);
+    const far = portBridge(a, { connect: here(gone.port) });
     expect(await far.status).toBe(1);
     expect(far.said).toEqual([
       `could not connect to 127.0.0.1:${gone.port}: nothing listens there; the stream is closed`,
@@ -572,7 +579,7 @@ describe('tr-ai-intercom-stream', () => {
     }
     const bad = await run(['--connect', 'sshd', a], { stdin: 'none' });
     expect(bad.status).toBe(1);
-    expect(bad.stderr).toMatch(/--connect takes a port, or an address and a port/);
+    expect(bad.stderr).toMatch(/--connect takes a port, an address and a port, or the path/);
     // Nothing of that used the URL.
     const receiving = run(['--receive', a], { stdin: 'none' });
     await wait(300);
@@ -586,7 +593,7 @@ describe('tr-ai-intercom-stream', () => {
     expect((await run(['--send', '--receive', a], { stdin: 'none' })).status).not.toBe(0);
     const help = await run(['--help'], { stdin: 'none' });
     const text = help.stdout.toString() + help.stderr;
-    expect(text).toContain('tr-ai-intercom-stream [<opt> ...] <url>');
+    expect(text).toContain('tr-ai-intercom-stream [<opt> ...] [<url>]');
     expect(text).toContain('--receive');
     expect(text).toContain('--listen');
     expect(text).toContain('--connect');
