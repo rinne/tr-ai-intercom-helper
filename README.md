@@ -530,7 +530,8 @@ An agent that its administrator allowed to can open a **stream** on its
 intercom (2.3.0 or later): a relayed, two-way flow of bytes with two ends.
 The tool `stream_open` gives a single-use WebSocket URL for each end, and
 whoever opens the two URLs is connected to each other through the intercom.
-`tr-ai-intercom-stream` connects one end to standard input and output.
+`tr-ai-intercom-stream` connects one end to standard input and output, or
+to a TCP port of the machine it runs on.
 
 ```sh
 # on one machine
@@ -556,18 +557,71 @@ npx -y -p tr-ai-intercom-helper tr-ai-intercom-stream --receive '<url of end b>'
   program then reads its input more slowly. A slow reader of its output
   slows the stream in the same way.
 - The reason of the closing goes to standard error. **Status** 0: the other
-  end closed the stream, or this end did after `--send`; 1: the URL was
-  refused or the intercom could not be reached; 2: the stream ended for
-  another reason, for example cut by an administrator or idle for too long;
-  130: interrupted.
+  end closed the stream, or this end did after `--send` or when the program
+  on its port ended its connection; 1: this end could not be set up (the URL
+  was refused, the intercom could not be reached, the port could not be
+  listened on or connected to); 2: the stream ended for another reason, for
+  example cut by an administrator or idle for too long; 130: interrupted.
 - The URL is the only credential of an end. The program never prints or
   logs it, and takes `wss://` URLs only (`ws://` for localhost). A URL works
   for one connection: a transfer that failed needs a new stream.
 - It needs Node.js 20 or later. Any WebSocket client does the same job; the
   intercom relays binary messages of up to 1 MiB.
 
-Both options can also be given in the environment, as
-`INTERCOM_STREAM_OPT_SEND` and `INTERCOM_STREAM_OPT_RECEIVE`.
+### A port instead of standard input and output
+
+With `--listen` or `--connect` (2.4.0 or later) a TCP port is at the end, so
+that programs that speak TCP can use a stream: a client on one machine and
+its server on another, neither of which can reach the other directly.
+
+```sh
+# where the server is: connect the stream to its port
+npx -y -p tr-ai-intercom-helper tr-ai-intercom-stream --connect 22 '<url of end a>'
+# where the client is: open a port for it
+npx -y -p tr-ai-intercom-helper tr-ai-intercom-stream --listen 2222 '<url of end b>'
+ssh -p 2222 localhost
+```
+
+| Option                         | What it does                                                                                            |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------- |
+| `--listen [<address>:]<port>`  | Opens the port and puts the first program that connects to it on the stream. Nobody is let in after it. |
+| `--connect [<address>:]<port>` | Connects to the port when the other end says that it is there, and puts that connection on the stream.  |
+
+- Without an address the port is on `127.0.0.1`. An IPv6 address is written
+  in brackets, `[::1]:2222`. `--listen 0` lets the system choose a port.
+- An end on `--listen` says on standard error where it listens, and opens
+  its port before it uses the URL: a port that cannot be had costs no
+  stream.
+- **One stream carries one connection.** When the program on a port ends
+  its connection, the stream is closed, and the connection on the other
+  end's port with it; when the stream is closed, the program's connection
+  is ended after it got everything. A stream has no half-close: a program
+  that ends its sending side and then waits for an answer does not get it.
+  For a second connection, open a second stream.
+- An end on `--connect` leaves its server alone until the other end is
+  there, so that the server is not kept waiting and gives up before its
+  client came. Every end of this program says that it is there by sending
+  an empty message: at once on standard input and output, and when a program
+  connected on `--listen`. Another WebSocket client can do the same; the
+  first message of any length does it. Two ends on `--connect` wait for each
+  other in vain.
+- What arrives before the program on a `--listen` port has connected is
+  kept for it, also when the other end has sent everything and left.
+- The two kinds of end mix: a file sent with `--send` goes into a port on
+  `--connect`, and what a server on `--connect` says is saved with
+  `--receive`. `--listen` and `--connect` cannot be combined with each
+  other or with `--send` and `--receive`.
+- The port has no protection of its own. On `127.0.0.1` every program and
+  user of the machine can connect to a `--listen` port, and the first one
+  to do so has the stream. With another address, everything that can reach
+  it can; the program says so when it starts. `--connect` accepts any
+  address this machine can reach, and whoever holds the other end then
+  talks to that service as this machine would: point it only at what the
+  other party is meant to use.
+
+All options can also be given in the environment: `INTERCOM_STREAM_OPT_SEND`,
+`INTERCOM_STREAM_OPT_RECEIVE`, `INTERCOM_STREAM_OPT_LISTEN` and
+`INTERCOM_STREAM_OPT_CONNECT`.
 
 ## The connection
 

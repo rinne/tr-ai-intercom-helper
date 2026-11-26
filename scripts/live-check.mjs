@@ -19,7 +19,8 @@
 //
 // On an intercom with streams (2.3 and later), where the owner of the
 // exchange is allowed any, it checks tr-ai-intercom-stream: an agent opens
-// a stream, and a file goes from one command to another through it.
+// a stream, and a file goes from one command to another through it; and
+// with a port on each end, a program talks to a server through another.
 //
 //   npm run build
 //   node scripts/live-check.mjs --intercom-url http://localhost:8080 \
@@ -493,7 +494,7 @@ async function checkJoining(joiner, viewOf) {
 // ---- streams, with tr-ai-intercom-stream --------------------------------------
 
 /** Run the bridge on one end; resolves with its status and what it wrote. */
-function bridge(args, input) {
+function bridge(args, input, hear) {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [STREAM, ...args], {
       stdio: [input ? 'pipe' : 'ignore', 'pipe', 'pipe'],
@@ -501,7 +502,10 @@ function bridge(args, input) {
     const out = [];
     let err = '';
     child.stdout.on('data', (chunk) => out.push(chunk));
-    child.stderr.on('data', (chunk) => (err += chunk.toString()));
+    child.stderr.on('data', (chunk) => {
+      err += chunk.toString();
+      hear?.(chunk.toString());
+    });
     if (input) child.stdin.end(input);
     child.on('close', (status) => resolve({ status, out: Buffer.concat(out), err }));
   });
@@ -545,6 +549,54 @@ async function checkStreams(x, streamer) {
     again.status === 1,
     again.err.trim(),
   );
+
+  // A port on each end: a program reaches a server through two commands.
+  const echo = net.createServer((s) => {
+    s.on('error', () => undefined);
+    s.pipe(s);
+  });
+  await new Promise((resolve) => echo.listen(0, '127.0.0.1', resolve));
+  const ported = await agent.tool('stream_open', { label: 'helper live check, ports' });
+  const far = bridge(['--connect', String(echo.address().port), ported.ends.a]);
+  let said = '';
+  const near = bridge(['--listen', '0', ported.ends.b], undefined, (text) => (said += text));
+  const at = () => /listening on 127\.0\.0\.1:(\d+)/.exec(said)?.[1];
+  await until('the bridge to listen on a port', () => at(), 10_000).catch(() => undefined);
+  check(
+    'stream: an end listens on a port of this machine and says which',
+    Boolean(at()),
+    said.trim(),
+  );
+  if (at()) {
+    const words = randomBytes(100_000);
+    const got = [];
+    const client = net.connect({ host: '127.0.0.1', port: Number(at()) });
+    client.on('error', () => undefined);
+    client.on('data', (chunk) => got.push(chunk));
+    client.write(words);
+    await until(
+      'the echo through the stream',
+      () => Buffer.concat(got).length >= words.length,
+      20_000,
+    ).catch(() => undefined);
+    check(
+      'stream: a program on that port talks to a server on the port of the other end',
+      Buffer.concat(got).equals(words),
+      `${Buffer.concat(got).length} of ${words.length} bytes`,
+    );
+    client.end();
+    const [nearEnd, farEnd] = await Promise.all([near, far]);
+    check(
+      'stream: both ends end with status 0 when the program ends its connection',
+      nearEnd.status === 0 && farEnd.status === 0,
+      `${nearEnd.err.trim()} / ${farEnd.err.trim()}`,
+    );
+  } else {
+    await agent.tool('stream_close', { stream: ported.stream });
+    await Promise.all([near, far]);
+  }
+  echo.close();
+
   const left = await agent.tool('stream_list');
   check('stream: the agent has no stream left', left.streams.length === 0);
 }

@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import http from 'node:http';
-import type { AddressInfo } from 'node:net';
+import net, { type AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -11,7 +11,14 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { WebSocketServer, type WebSocket } from 'ws';
 
-import { BridgeError, CHUNK_BYTES, checkStreamUrl, runBridge } from '../src/stream/bridge.js';
+import {
+  BridgeError,
+  CHUNK_BYTES,
+  checkStreamUrl,
+  parseLocalAddress,
+  runBridge,
+  type PortSide,
+} from '../src/stream/bridge.js';
 import { STREAM_OPTIONS } from '../src/stream-options.js';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -98,12 +105,87 @@ async function startRelay(): Promise<Relay> {
 
 let relay: Relay;
 let tmp: string;
+/** What a test opened and the end of the test closes. */
+const opened: (() => void)[] = [];
+
+const wait = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+async function until(what: () => boolean, ms = 3000): Promise<void> {
+  const end = Date.now() + ms;
+  while (!what()) {
+    if (Date.now() > end) throw new Error('waited in vain');
+    await wait(10);
+  }
+}
+
+/** A TCP server on this machine: it may greet whoever connects, echo, or hang up after the greeting. */
+async function tcpServer(opts: { greeting?: string; echo?: boolean; hangUp?: boolean } = {}) {
+  const state = { port: 0, connections: 0, closed: 0, received: Buffer.alloc(0) };
+  const sockets = new Set<net.Socket>();
+  const server = net.createServer((s) => {
+    state.connections++;
+    sockets.add(s);
+    s.on('error', () => undefined);
+    s.on('close', () => {
+      state.closed++;
+      sockets.delete(s);
+    });
+    s.on('data', (chunk: Buffer) => (state.received = Buffer.concat([state.received, chunk])));
+    if (opts.greeting) s.write(opts.greeting);
+    if (opts.hangUp) s.end();
+    else if (opts.echo) s.pipe(s);
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  state.port = (server.address() as AddressInfo).port;
+  opened.push(() => {
+    for (const s of sockets) s.destroy();
+    server.close();
+  });
+  return state;
+}
+
+/** A program that connects to a port, with what it got. */
+async function tcpClient(port: number) {
+  const got: Buffer[] = [];
+  const socket = net.connect({ host: '127.0.0.1', port });
+  socket.on('data', (chunk: Buffer) => got.push(chunk));
+  const ended = new Promise<void>((resolve) => socket.once('close', () => resolve()));
+  opened.push(() => socket.destroy());
+  await new Promise<void>((resolve, reject) => {
+    socket.once('connect', resolve);
+    socket.once('error', reject);
+  });
+  socket.on('error', () => undefined);
+  return { socket, ended, received: () => Buffer.concat(got) };
+}
+
+/** One end on a port, run in this process. */
+function portBridge(url: string, port: PortSide) {
+  const said: string[] = [];
+  const stop = new AbortController();
+  let tell: (port: number) => void = () => undefined;
+  /** The port a listening end got. */
+  const listening = new Promise<number>((resolve) => (tell = resolve));
+  const status = runBridge({
+    url: checkStreamUrl(url),
+    port,
+    say: (message) => {
+      said.push(message);
+      const at = /^listening on 127\.0\.0\.1:(\d+)/.exec(message);
+      if (at) tell(Number(at[1]));
+    },
+    signal: stop.signal,
+  });
+  opened.push(() => stop.abort());
+  return { said, status, stop, listening };
+}
+const here = (port: number): { host: string; port: number } => ({ host: '127.0.0.1', port });
 
 beforeEach(async () => {
   relay = await startRelay();
   tmp = await mkdtemp(path.join(tmpdir(), 'tai-stream-'));
 });
 afterEach(async () => {
+  for (const close of opened.splice(0)) close();
   await relay.close();
   await rm(tmp, { recursive: true, force: true });
 });
@@ -237,6 +319,175 @@ describe('an end in a program', () => {
   });
 });
 
+describe('an end on a port', () => {
+  it('reads a port, or an address and a port', () => {
+    expect(parseLocalAddress('2222', 'listen')).toEqual({ host: '127.0.0.1', port: 2222 });
+    expect(parseLocalAddress(' 0 ', 'listen')).toEqual({ host: '127.0.0.1', port: 0 });
+    expect(parseLocalAddress('0.0.0.0:8022', 'listen')).toEqual({ host: '0.0.0.0', port: 8022 });
+    expect(parseLocalAddress('[::1]:22', 'connect')).toEqual({ host: '::1', port: 22 });
+    expect(parseLocalAddress('db.example.com:5432', 'connect')).toEqual({
+      host: 'db.example.com',
+      port: 5432,
+    });
+    for (const [text, option] of [
+      ['', 'listen'],
+      ['ssh', 'connect'],
+      ['127.0.0.1', 'listen'],
+      ['::1:22', 'connect'],
+      ['127.0.0.1:70000', 'listen'],
+      ['0', 'connect'],
+      ['127.0.0.1:22/x', 'connect'],
+    ] as const) {
+      expect(() => parseLocalAddress(text, option), text).toThrow(BridgeError);
+      expect(() => parseLocalAddress(text, option), text).toThrow(`--${option} takes a port`);
+    }
+  });
+
+  it('puts a client and a server on a stream, and connects to the server when the client came', async () => {
+    const greeting = 'hello from the server\n';
+    const server = await tcpServer({ greeting, echo: true });
+    const { a, b } = relay.stream();
+    const far = portBridge(a, { connect: here(server.port) });
+    const near = portBridge(b, { listen: here(0) });
+    const port = await near.listening;
+    await wait(150);
+    // Both ends are on the stream, and the server is left alone: no program has come.
+    expect(server.connections).toBe(0);
+    const client = await tcpClient(port);
+    // The server speaks first; the client has sent nothing.
+    await until(() => client.received().toString() === greeting);
+    expect(server.connections).toBe(1);
+    const sent = randomBytes(300_000);
+    client.socket.write(sent);
+    await until(() => client.received().length === greeting.length + sent.length);
+    expect(client.received().subarray(greeting.length).equals(sent)).toBe(true);
+    // The client ends its connection: the stream is closed, and the server's connection with it.
+    client.socket.end();
+    expect(await near.status).toBe(0);
+    expect(await far.status).toBe(0);
+    expect(near.said.at(-1)).toBe(
+      'the program on the port ended its connection; the stream is closed',
+    );
+    expect(far.said).toEqual(['the other end closed the stream']);
+    await until(() => server.closed === 1);
+    await client.ended;
+    expect(Math.max(...relay.sizes)).toBeLessThanOrEqual(CHUNK_BYTES);
+  });
+
+  it('lets the first program in and nobody after it', async () => {
+    const { a, b } = relay.stream();
+    const near = portBridge(b, { listen: here(0) });
+    const other = bridge(a, 'both');
+    const port = await near.listening;
+    const first = await tcpClient(port);
+    first.socket.write('first');
+    await until(() => other.received().toString() === 'first');
+    await expect(tcpClient(port)).rejects.toThrow(/ECONNREFUSED/);
+    other.input.write('still yours');
+    await until(() => first.received().toString() === 'still yours');
+    // The other end closes: the program's connection is ended after it got everything.
+    other.stop.abort();
+    expect(await near.status).toBe(0);
+    await first.ended;
+    expect(near.said.at(-1)).toBe('the other end closed the stream');
+  });
+
+  it('keeps what arrived for a program that connects later, also after the other end left', async () => {
+    const { a, b } = relay.stream();
+    const near = portBridge(b, { listen: here(0) });
+    const port = await near.listening;
+    await wait(100);
+    const sender = bridge(a, 'send');
+    sender.input.end('kept for later');
+    expect(await sender.status).toBe(0);
+    await until(() => near.said.length === 2);
+    expect(near.said[1]).toBe(
+      'the other end closed the stream; what it sent is kept for the program that connects to the port',
+    );
+    const client = await tcpClient(port);
+    await client.ended;
+    expect(client.received().toString()).toBe('kept for later');
+    expect(await near.status).toBe(0);
+  });
+
+  it('gives what a server says first to an end that only receives', async () => {
+    const server = await tcpServer({ greeting: 'the whole log\n', hangUp: true });
+    const { a, b } = relay.stream();
+    const far = portBridge(a, { connect: here(server.port) });
+    await wait(100);
+    expect(server.connections).toBe(0);
+    // An end on standard output says that it is there as soon as it is.
+    const receiver = bridge(b, 'receive');
+    expect(await receiver.status).toBe(0);
+    expect(receiver.received().toString()).toBe('the whole log\n');
+    expect(await far.status).toBe(0);
+    expect(far.said).toEqual([
+      'the program on the port ended its connection; the stream is closed',
+    ]);
+  });
+
+  it('carries a file into a port', async () => {
+    const server = await tcpServer();
+    const { a, b } = relay.stream();
+    const far = portBridge(a, { connect: here(server.port) });
+    const sender = bridge(b, 'send');
+    const sent = randomBytes(200_000);
+    sender.input.end(sent);
+    expect(await sender.status).toBe(0);
+    expect(await far.status).toBe(0);
+    await until(() => server.closed === 1);
+    expect(server.received.equals(sent)).toBe(true);
+  });
+
+  it('fails with status 1 when the port cannot be had, and has not used the URL', async () => {
+    const busy = await tcpServer();
+    const { a, b } = relay.stream();
+    const near = portBridge(b, { listen: here(busy.port) });
+    expect(await near.status).toBe(1);
+    expect(near.said).toEqual([
+      `could not listen on 127.0.0.1:${busy.port}: the port is in use; the URL of the stream was not used`,
+    ]);
+    const again = bridge(b, 'receive');
+    const sender = bridge(a, 'send');
+    sender.input.end('the URL still works');
+    expect(await again.status).toBe(0);
+    expect(again.received().toString()).toBe('the URL still works');
+  });
+
+  it('fails with status 1 when nothing listens where it should connect, and closes the stream', async () => {
+    const gone = await tcpServer();
+    for (const close of opened.splice(0)) close();
+    await wait(50);
+    const { a, b } = relay.stream();
+    const far = portBridge(a, { connect: here(gone.port) });
+    const other = bridge(b, 'both');
+    expect(await far.status).toBe(1);
+    expect(far.said).toEqual([
+      `could not connect to 127.0.0.1:${gone.port}: nothing listens there; the stream is closed`,
+    ]);
+    expect(await other.status).toBe(0);
+  });
+
+  it('says so when it listens where others can reach it, and ends when interrupted', async () => {
+    const { b } = relay.stream();
+    const said: string[] = [];
+    const stop = new AbortController();
+    const status = runBridge({
+      url: checkStreamUrl(b),
+      port: { listen: { host: '0.0.0.0', port: 0 } },
+      say: (message) => said.push(message),
+      signal: stop.signal,
+    });
+    await until(() => said.length === 1);
+    expect(said[0]).toMatch(
+      /^listening on 0\.0\.0\.0:\d+; the first program that connects is on the stream, and it may be any program that can reach this address/,
+    );
+    await wait(100);
+    stop.abort();
+    expect(await status).toBe(130);
+  });
+});
+
 describe('tr-ai-intercom-stream', () => {
   const run = (
     args: string[],
@@ -286,6 +537,49 @@ describe('tr-ai-intercom-stream', () => {
     expect(gone.stderr).toMatch(/refused the URL \(404\)/);
   });
 
+  it('puts a port on each end: a client reaches a server through two commands', async () => {
+    const server = await tcpServer({ echo: true });
+    const { a, b } = relay.stream();
+    const far = run(['--connect', String(server.port), a], { stdin: 'none' });
+    const child = spawn(process.execPath, [program, '--listen', '0', b], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    opened.push(() => child.kill());
+    let err = '';
+    child.stderr.on('data', (chunk: Buffer) => (err += chunk.toString()));
+    const near = new Promise<number | null>((resolve) => child.on('close', resolve));
+    await until(() => /listening on 127\.0\.0\.1:\d+/.test(err), 5000);
+    const client = await tcpClient(Number(/listening on 127\.0\.0\.1:(\d+)/.exec(err)![1]));
+    client.socket.write('through two commands');
+    await until(() => client.received().toString() === 'through two commands');
+    client.socket.end();
+    expect(await near).toBe(0);
+    const farEnd = await far;
+    expect(farEnd.status).toBe(0);
+    expect(farEnd.stderr).toBe('tr-ai-intercom-stream: the other end closed the stream\n');
+    expect(err).toMatch(/the program on the port ended its connection; the stream is closed\n$/);
+    expect(err + farEnd.stderr).not.toContain('/mcp/stream/');
+  });
+
+  it('wants one of standard input and output, --listen and --connect, and a port it can read', async () => {
+    const { a } = relay.stream();
+    for (const args of [
+      ['--listen', '2222', '--connect', '22', a],
+      ['--listen', '2222', '--send', a],
+      ['--connect', '22', '--receive', a],
+    ]) {
+      expect((await run(args, { stdin: 'none' })).status, args.join(' ')).not.toBe(0);
+    }
+    const bad = await run(['--connect', 'sshd', a], { stdin: 'none' });
+    expect(bad.status).toBe(1);
+    expect(bad.stderr).toMatch(/--connect takes a port, or an address and a port/);
+    // Nothing of that used the URL.
+    const receiving = run(['--receive', a], { stdin: 'none' });
+    await wait(300);
+    relay.cut(1000, 'peer-closed');
+    expect((await receiving).status).toBe(0);
+  });
+
   it('wants exactly one URL and at most one of --send and --receive', async () => {
     expect((await run([], { stdin: 'none' })).status).not.toBe(0);
     const { a } = relay.stream();
@@ -294,6 +588,8 @@ describe('tr-ai-intercom-stream', () => {
     const text = help.stdout.toString() + help.stderr;
     expect(text).toContain('tr-ai-intercom-stream [<opt> ...] <url>');
     expect(text).toContain('--receive');
+    expect(text).toContain('--listen');
+    expect(text).toContain('--connect');
     expect(text).toContain('Status 0');
   });
 

@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.4.0 (2026-11-26)
+
+- `tr-ai-intercom-stream` can put a **TCP port** on an end of a stream
+  instead of standard input and output, so that programs that speak TCP
+  (ssh, rsync, a database client and its server) can use one.
+  - `--listen [<address>:]<port>` opens the port and puts the first program
+    that connects to it on the stream; `--connect [<address>:]<port>`
+    connects to the port. Without an address it is `127.0.0.1`; `--listen 0`
+    lets the system choose a port and says which.
+  - One stream carries one connection: when the program on a port ends its
+    connection the stream is closed, and the other way round.
+  - An end on `--connect` connects only when the other end says that it is
+    there, so that a server is not kept waiting for a client that has not
+    come. For that, every end now sends an empty message once its own side
+    is ready; it changes nothing for an earlier version at the other end.
+  - A `--listen` end opens its port before it uses the URL, and keeps what
+    arrived for a program that connects later.
+  - Status 1 now also covers a port that could not be listened on or
+    connected to.
+- `scripts/live-check.mjs` checks a stream with a port on each end.
+
 ## 2.3.0 (2026-11-26)
 
 - A third program, **`tr-ai-intercom-stream`**: one end of a stream of an
